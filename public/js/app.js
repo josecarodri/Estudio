@@ -243,11 +243,14 @@
       const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
       if (cfg?.iceServers) state.iceServers = cfg.iceServers;
       state.lanUrls = cfg?.lanUrls || [];
-      state.clock = await Clock.sync();
+      state.publicUrl = cfg?.publicUrl || '';
+      state.hasTurn = !!cfg?.turn;
+      state.clock = await Clock.sample(12);
     } finally {
       $('#btnJoin').disabled = false;
     }
-    setInterval(() => { if (!state.rec) Clock.sync(6).then((c) => { state.clock = c; }).catch(() => {}); }, 30000);
+    // Muestras de reloj continuas (ligeras): la estimación usa la más rápida del último minuto.
+    setInterval(() => { Clock.sample(2).then(updateClock).catch(() => {}); }, 5000);
 
     history.replaceState(null, '', `?sala=${encodeURIComponent(room)}`);
     $('#setup').hidden = true;
@@ -255,55 +258,74 @@
     $('#roomName').textContent = room;
     $('#localName').textContent = `${name} (tú)`;
     $('#inviteLink').value = inviteUrl();
-    $('#clockInfo').textContent = `reloj ±${(state.clock.rtt / 2).toFixed(0)} ms`;
+    updateClock(state.clock);
     connectEvents();
     window.addEventListener('beforeunload', (e) => {
       if (state.rec || state.uploaders.some((u) => !u.finished)) { e.preventDefault(); e.returnValue = ''; }
     });
   }
 
+  function updateClock(c) {
+    state.clock = c;
+    const el = $('#clockInfo');
+    el.textContent = `sincronía ±${Math.max(1, Math.round(c.rtt / 2))} ms`;
+    el.title = `Precisión estimada del reloj común (fuente: ${c.source})`;
+    el.classList.toggle('bad', c.rtt / 2 > 40);
+  }
+
   function inviteUrl() {
-    // Desde localhost, el enlace para el iPad debe llevar la IP del PC en la red local.
+    // Prioridad: enlace público de internet; desde localhost, la IP del PC en la red local; si no, esta misma dirección.
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-    const origin = local && state.lanUrls?.length ? state.lanUrls[0] : location.origin;
+    const origin = state.publicUrl || (local && state.lanUrls?.length ? state.lanUrls[0] : location.origin);
     return `${origin}${location.pathname}?sala=${encodeURIComponent(state.room)}`;
   }
 
-  function connectEvents() {
+  /** Canal de eventos de la sala por WebSocket, con reconexión automática. */
+  function connectEvents(attempt = 0) {
     const q = new URLSearchParams({ peer: state.me.id, name: state.me.name, device: state.me.device });
-    const es = new EventSource(`/api/rooms/${encodeURIComponent(state.room)}/events?${q}`);
-    state.events = es;
-    es.addEventListener('welcome', (e) => {
-      const d = JSON.parse(e.data);
-      setConn('Conectado a la sala');
-      if (d.peers.length) {
-        // Soy el último en llegar: inicio la llamada.
-        const p = d.peers[0];
-        startCall(p, true);
-      } else {
-        setRemote(null);
-      }
-      if (d.session?.recording && !state.rec) toast('Hay una grabación en curso; empezará con la próxima.', 'warn');
-    });
-    es.addEventListener('peer-joined', (e) => {
-      const p = JSON.parse(e.data);
-      toast(`${p.name} ha entrado`);
-      startCall(p, false);
-    });
-    es.addEventListener('peer-left', (e) => {
-      const { id } = JSON.parse(e.data);
-      if (state.remote?.id === id) {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/api/rooms/${encodeURIComponent(state.room)}/ws?${q}`);
+    state.events = ws;
+    let opened = false;
+    const handlers = {
+      welcome: onWelcome,
+      'peer-joined': (p) => { toast(`${p.name} ha entrado`); startCall(p, false); },
+      'peer-left': ({ id }) => {
+        if (state.remote?.id !== id) return;
         toast(`${state.remote.name} ha salido`, 'warn');
         closeCall();
         setRemote(null);
-      }
-    });
-    es.addEventListener('signal', (e) => onSignal(JSON.parse(e.data)));
-    es.addEventListener('status', (e) => { state.remoteStatus = JSON.parse(e.data).status; renderRemoteStatus(); });
-    es.addEventListener('record-start', (e) => startRecording(JSON.parse(e.data)).catch((err) => { console.error(err); toast(`Error al grabar: ${err.message}`, 'error'); }));
-    es.addEventListener('record-stop', (e) => stopRecording(JSON.parse(e.data)));
-    es.onerror = () => setConn('Reconectando…');
-    es.addEventListener('open', () => setConn('Conectado a la sala'));
+      },
+      signal: onSignal,
+      status: (d) => { state.remoteStatus = d.status; renderRemoteStatus(); },
+      'record-start': (d) => startRecording(d).catch((err) => { console.error(err); toast(`Error al grabar: ${err.message}`, 'error'); }),
+      'record-stop': stopRecording,
+      'room-full': (d) => { state.roomFull = true; setConn('Sala llena'); toast(d.error, 'error'); },
+    };
+    ws.onopen = () => { opened = true; setConn('Conectado a la sala'); };
+    ws.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      handlers[msg.event]?.(msg.data);
+    };
+    ws.onclose = () => {
+      if (state.events !== ws || state.roomFull) return;
+      setConn('Reconectando…');
+      const next = opened ? 0 : attempt + 1;
+      setTimeout(() => connectEvents(next), Math.min(1000 * 2 ** next, 15000));
+    };
+  }
+
+  function onWelcome(d) {
+    setConn('Conectado a la sala');
+    if (d.peers.length) {
+      // Soy el último en llegar: inicio la llamada.
+      startCall(d.peers[0], true);
+    } else {
+      closeCall();
+      setRemote(null);
+    }
+    if (d.session?.recording && !state.rec) toast('Hay una grabación en curso; empezará con la próxima.', 'warn');
   }
 
   function setConn(text) { $('#connInfo').textContent = text; }
@@ -318,6 +340,7 @@
 
   function closeCall() {
     if (state.pc) { state.pc.onicecandidate = null; state.pc.ontrack = null; state.pc.close(); }
+    clearInterval(state.clockPing);
     state.pc = null;
     state.pendingCandidates = [];
     connectRemoteAudio(null);
@@ -339,6 +362,7 @@
         s.setParameters(p).catch(() => {});
       }
     }
+    setupClockChannel(pc);
     pc.onicecandidate = (e) => { if (e.candidate) sendSignal(peer.id, { candidate: e.candidate.toJSON() }); };
     pc.ontrack = (e) => {
       const stream = state.remote.stream;
@@ -349,8 +373,14 @@
     };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
-      $('#remoteState').textContent = { connected: '', connecting: 'conectando…', failed: 'conexión fallida', disconnected: 'reconectando…' }[st] ?? st;
-      if (st === 'failed' && state.offerer) pc.restartIce();
+      $('#remoteState').textContent = { connected: '', connecting: 'conectando…', failed: 'sin conexión de vídeo', disconnected: 'reconectando…' }[st] ?? st;
+      if (st === 'connected') reportRoute(pc);
+      if (st === 'failed') {
+        if (state.offerer) pc.restartIce();
+        toast(state.hasTurn
+          ? 'No se pudo conectar la llamada. Reintentando…'
+          : 'La llamada no conecta entre estas dos redes. Configura un servidor TURN (ver README). La grabación local funciona igualmente.', 'warn');
+      }
     };
     pc.onnegotiationneeded = async () => {
       if (!state.offerer || state.pc !== pc) return;
@@ -359,6 +389,46 @@
         sendSignal(peer.id, { description: pc.localDescription.toJSON() });
       } catch (err) { console.error(err); }
     };
+  }
+
+  /**
+   * Canal de datos directo para afinar el reloj: si la otra persona está en el mismo PC que el servidor
+   * (su reloj es casi exacto), sus respuestas son muestras de reloj con menos latencia que pasar por el túnel.
+   */
+  function setupClockChannel(pc) {
+    let ch;
+    try { ch = pc.createDataChannel('reloj', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 }); } catch { return; }
+    ch.onmessage = (e) => {
+      let m;
+      try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === 'ping') {
+        // Solo responde quien tiene un reloj de referencia fiable (±2 ms).
+        if (state.clock.rtt < 4) ch.send(JSON.stringify({ t: 'pong', t0: m.t0, server: serverNow(), q: state.clock.rtt }));
+      } else if (m.t === 'pong' && m.q < 4) {
+        Clock.addSample({ t0: m.t0, server: m.server, t1: localNow(), source: 'directo' });
+        updateClock(Clock.estimate());
+      }
+    };
+    ch.onopen = () => {
+      clearInterval(state.clockPing);
+      state.clockPing = setInterval(() => {
+        if (ch.readyState === 'open' && state.clock.rtt >= 4) ch.send(JSON.stringify({ t: 'ping', t0: localNow() }));
+      }, 1000);
+    };
+  }
+
+  /** Indica si la llamada va directa o retransmitida por TURN. */
+  async function reportRoute(pc) {
+    try {
+      const stats = await pc.getStats();
+      let pair = null;
+      stats.forEach((r) => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+      if (!pair) stats.forEach((r) => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+      const local = pair && stats.get(pair.localCandidateId);
+      const relay = local?.candidateType === 'relay';
+      $('#routeInfo').textContent = relay ? 'llamada vía TURN' : 'llamada directa';
+      $('#routeInfo').hidden = false;
+    } catch { /* sin estadísticas */ }
   }
 
   async function onSignal({ from, data }) {
@@ -495,7 +565,7 @@
     };
     recorder.onstop = () => {
       // Se espera a que se guarde el último trozo antes de cerrar la pista.
-      setTimeout(() => uploader.finish(finishInfo(r.startedAtServer, r.endedAtServer, r.beepAt)), 200);
+      setTimeout(() => uploader.finish(finishInfo(r.startedAtServer, r.endedAtServer, r.beepAt, r.endBeepAt)), 200);
     };
     recorder.onerror = (e) => toast(`Error del grabador (${info.kind}): ${e.error?.message || ''}`, 'error');
     return r;
@@ -503,10 +573,11 @@
 
   // Los tiempos son orientativos (el evento "start" de MediaRecorder puede llegar tarde);
   // la referencia exacta para sincronizar es el pitido.
-  function finishInfo(startedAtServer, endedAtServer, beepAt) {
+  function finishInfo(startedAtServer, endedAtServer, beepAt, endBeepAt) {
     return {
       startedAtServer, endedAtServer,
       beepOffsetSec: beepAt && startedAtServer ? (beepAt - startedAtServer) / 1000 : null,
+      endBeepOffsetSec: endBeepAt && startedAtServer ? (endBeepAt - startedAtServer) / 1000 : null,
       clockRttMs: state.clock.rtt,
       userAgent: navigator.userAgent,
     };
@@ -523,7 +594,7 @@
     } else if (msg.type === 'stopped') {
       flushPcm(pcm);
       const endedAtServer = pcm.startedAtServer + (pcm.total / state.ctx.sampleRate) * 1000;
-      pcm.uploader.finish(finishInfo(pcm.startedAtServer, endedAtServer, pcm.session.beepAt));
+      pcm.uploader.finish(finishInfo(pcm.startedAtServer, endedAtServer, pcm.session.beepAt, pcm.endBeepAt));
       pcm.node.disconnect(); pcm.sink.disconnect();
       try { state.audio.recBus.disconnect(pcm.node); } catch { /* ya desconectado */ }
     }
@@ -549,7 +620,17 @@
     if (!rec || rec.stopping) return;
     rec.stopping = true;
     const stopLocal = (session.stopAt || serverNow()) - state.clock.offset;
+    // Pitido final: con el inicial permite medir y corregir la deriva entre los relojes de los dispositivos.
+    const endBeepLocal = session.endBeepAt ? session.endBeepAt - state.clock.offset : null;
+    const endBeepAt = endBeepLocal && endBeepLocal - localNow() > 50 && stopLocal - endBeepLocal > 0.3 * 1000 ? session.endBeepAt : null;
+    if (endBeepAt) {
+      scheduleBeep(ctxTimeFor(endBeepLocal));
+      setTimeout(flash, endBeepLocal - localNow());
+    }
+    for (const r of rec.recorders) r.endBeepAt = endBeepAt;
+    rec.worklet.endBeepAt = endBeepAt;
     rec.worklet.node.port.postMessage({ cmd: 'stop', at: ctxTimeFor(stopLocal) });
+    setRecordingUi('stopping');
     setTimeout(() => {
       for (const r of rec.recorders) if (r.recorder.state !== 'inactive') { r.endedAtServer = serverNow(); r.recorder.stop(); }
       clearInterval(rec.canvasTimer);
@@ -590,9 +671,9 @@
   function setRecordingUi(mode) {
     const btn = $('#btnRecord');
     btn.dataset.mode = mode;
-    btn.textContent = mode === 'idle' ? '● Grabar' : mode === 'armed' ? 'Preparando…' : '■ Detener';
-    btn.disabled = mode === 'armed';
-    $('#recBadge').hidden = mode !== 'recording';
+    btn.textContent = { idle: '● Grabar', armed: 'Preparando…', stopping: 'Terminando…' }[mode] || '■ Detener';
+    btn.disabled = mode === 'armed' || mode === 'stopping';
+    $('#recBadge').hidden = mode !== 'recording' && mode !== 'stopping';
     document.body.classList.toggle('recording', mode === 'recording');
     sendStatus();
   }
@@ -636,6 +717,15 @@
   }
 
   function renderUploads() {
+    // Por internet la subida puede ir más lenta que la grabación: lo pendiente queda a salvo en el dispositivo.
+    const pending = state.uploaders.filter((u) => !u.finished).reduce((a, u) => a + (u.bytesTotal - u.bytesAcked), 0);
+    const warn = $('#uploadWarning');
+    if (pending > 8 * 1024 * 1024 || (!state.rec && state.uploaders.some((u) => !u.finished))) {
+      warn.hidden = false;
+      warn.textContent = state.rec
+        ? `Pendiente de subir: ${fmtBytes(pending)}. Tu conexión sube más despacio de lo que grabas; no pasa nada, se guarda en este dispositivo y se terminará de subir al acabar.`
+        : `Faltan ${fmtBytes(pending)} por subir. No cierres esta página ni bloquees el dispositivo hasta que todo esté ✓ guardado.`;
+    } else warn.hidden = true;
     const box = $('#uploads');
     box.innerHTML = '';
     if (!state.uploaders.length) { box.innerHTML = '<p class="muted">Aún no hay grabaciones en esta sesión.</p>'; return; }
@@ -735,6 +825,9 @@
       } catch (err) { toast(err.message, 'error'); }
     });
     $('#btnCopy').addEventListener('click', async () => {
+      // El enlace público puede haber llegado después de entrar (el túnel tarda unos segundos).
+      const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
+      if (cfg) { state.publicUrl = cfg.publicUrl || ''; state.lanUrls = cfg.lanUrls || []; $('#inviteLink').value = inviteUrl(); }
       try { await navigator.clipboard.writeText($('#inviteLink').value); toast('Enlace copiado'); } catch { $('#inviteLink').select(); }
     });
     $('#btnMute').addEventListener('click', () => {

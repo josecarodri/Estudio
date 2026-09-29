@@ -3,18 +3,22 @@
  * Estudio: servidor de señalización + recepción de grabaciones.
  *
  * - Sirve la app web (public/).
- * - Señalización WebRTC por Server-Sent Events + POST (sin WebSockets, sin dependencias).
+ * - Señalización WebRTC: eventos del servidor por WebSocket, mensajes del cliente por POST.
  * - Reloj común (/api/time) para que ambos dispositivos empiecen a grabar a la vez.
  * - Recibe por trozos las grabaciones locales de cada dispositivo y las guarda en grabaciones/.
+ * - Credenciales TURN (Cloudflare u otro) para llamadas entre redes distintas.
  *
  * HTTPS (puerto 8443) con certificado autofirmado para que el iPad pueda usar cámara y micrófono
  * en la red local, y HTTP (puerto 8080) para usar en el propio PC (localhost) o detrás de un túnel.
+ * Con `--internet` abre además un túnel HTTPS público de Cloudflare para invitar desde cualquier lugar.
  */
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { WebSocketServer } = require('ws');
+require('./lib/env').loadEnv(path.join(__dirname, '.env'));
 const { slug, sessionIdFromDate, wavHeader, fixWavHeader, chunkDecision, extFromMime } = require('./lib/core');
 
 const HTTP_PORT = Number(process.env.PORT || 8080);
@@ -26,17 +30,46 @@ const CERT_DIR = path.join(ROOT, 'certs');
 const MAX_CHUNK = 64 * 1024 * 1024;
 const MAX_PEERS = 2;
 
-// Servidores ICE opcionales (TURN) para llamadas por internet con redes muy restrictivas.
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
-if (process.env.TURN_URL) {
-  ICE_SERVERS.push({ urls: process.env.TURN_URL, username: process.env.TURN_USER || '', credential: process.env.TURN_PASS || '' });
-}
-
 const now = () => performance.timeOrigin + performance.now();
 let httpsReady = false;
+let publicUrl = process.env.PUBLIC_URL || '';
+
+// ---------------------------------------------------------------- servidores ICE (STUN/TURN)
+// STUN basta en la mayoría de conexiones; TURN retransmite la llamada cuando las redes no permiten
+// conexión directa (redes móviles, empresas, algunos routers).
+const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+let turnCache = { at: 0, servers: [] };
+
+async function cloudflareTurn() {
+  const id = process.env.CLOUDFLARE_TURN_KEY_ID;
+  const token = process.env.CLOUDFLARE_TURN_API_TOKEN;
+  if (!id || !token) return [];
+  if (Date.now() - turnCache.at < 6 * 3600 * 1000) return turnCache.servers;
+  const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(id)}/credentials/generate-ice-servers`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ttl: 24 * 3600 }),
+  });
+  if (!r.ok) throw new Error(`Cloudflare TURN respondió ${r.status}`);
+  const j = await r.json();
+  const list = Array.isArray(j.iceServers) ? j.iceServers : [j.iceServers];
+  // Los que tienen credenciales son los TURN (el STUN ya va incluido aparte).
+  turnCache = { at: Date.now(), servers: list.filter((s) => s && s.username) };
+  return turnCache.servers;
+}
+
+async function iceServers() {
+  const out = [...STUN];
+  if (process.env.TURN_URL) {
+    out.push({ urls: process.env.TURN_URL.split(',').map((u) => u.trim()), username: process.env.TURN_USER || '', credential: process.env.TURN_PASS || '' });
+  }
+  try { out.push(...await cloudflareTurn()); } catch (err) { console.warn(`⚠  No se pudieron obtener credenciales TURN: ${err.message}`); }
+  return out;
+}
+const hasTurn = () => !!(process.env.TURN_URL || (process.env.CLOUDFLARE_TURN_KEY_ID && process.env.CLOUDFLARE_TURN_API_TOKEN));
 
 // ---------------------------------------------------------------- salas y sesiones
-/** room -> { peers: Map<id,{id,name,device,res}>, session: {id,dir,startAt,beepAt,recording} | null } */
+/** room -> { peers: Map<id,{id,name,device,ws}>, session: {id,dir,startAt,beepAt,recording} | null } */
 const rooms = new Map();
 /** `${room}/${session}` -> datos de session.json en memoria */
 const sessions = new Map();
@@ -49,12 +82,12 @@ function getRoom(name) {
   return r;
 }
 
-function send(res, event, data) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+function send(peer, event, data) {
+  if (peer.ws.readyState === 1) peer.ws.send(JSON.stringify({ event, data }));
 }
 
 function broadcast(room, event, data, exceptId) {
-  for (const p of room.peers.values()) if (p.id !== exceptId) send(p.res, event, data);
+  for (const p of room.peers.values()) if (p.id !== exceptId) send(p, event, data);
 }
 
 function peerList(room) {
@@ -139,7 +172,7 @@ async function handle(req, res) {
 
   if (parts[1] === 'config') {
     const lanUrls = httpsReady ? lanAddresses().map((ip) => `https://${ip}:${HTTPS_PORT}`) : [];
-    return json(res, 200, { iceServers: ICE_SERVERS, lanUrls });
+    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), lanUrls, publicUrl });
   }
 
   // /api/rooms/:room/...
@@ -148,35 +181,11 @@ async function handle(req, res) {
     const room = getRoom(roomName);
     const action = parts[3];
 
-    if (action === 'events' && req.method === 'GET') {
-      const id = slug(url.searchParams.get('peer'), '');
-      if (!id) return json(res, 400, { error: 'Falta peer' });
-      const existing = room.peers.get(id);
-      if (!existing && room.peers.size >= MAX_PEERS) return json(res, 409, { error: 'La sala está llena (máximo 2 personas)' });
-      if (existing) existing.res.end();
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-      res.write('retry: 2000\n\n');
-      const peer = { id, name: String(url.searchParams.get('name') || 'Invitado').slice(0, 40), device: String(url.searchParams.get('device') || '').slice(0, 40), res };
-      room.peers.set(id, peer);
-      send(res, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session });
-      broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device }, id);
-      const ping = setInterval(() => res.write(': ping\n\n'), 15000);
-      req.on('close', () => {
-        clearInterval(ping);
-        if (room.peers.get(id) === peer) {
-          room.peers.delete(id);
-          broadcast(room, 'peer-left', { id });
-          if (!room.peers.size && !room.session?.recording) rooms.delete(roomName);
-        }
-      });
-      return;
-    }
-
     if (action === 'signal' && req.method === 'POST') {
       const msg = await readJson(req);
       const to = room.peers.get(msg.to);
       if (!to) return json(res, 404, { error: 'Destino no conectado' });
-      send(to.res, 'signal', { from: msg.from, data: msg.data });
+      send(to, 'signal', { from: msg.from, data: msg.data });
       return json(res, 200, { ok: true });
     }
 
@@ -194,8 +203,8 @@ async function handle(req, res) {
         const id = sessionIdFromDate(new Date(t));
         const dir = sessionDir(roomName, id);
         fs.mkdirSync(dir, { recursive: true });
-        // Margen para que todos reciban la orden; la "claqueta" (pitido) suena 1 s después del arranque.
-        const startAt = t + 2500;
+        // Margen para que la orden llegue a todos (también por internet); la "claqueta" (pitido) suena 1 s después del arranque.
+        const startAt = t + 3000;
         const s = {
           room: roomName, id, dir, createdAt: new Date(t).toISOString(), startAt, beepAt: startAt + 1000,
           participants: Object.fromEntries(peerList(room).map((p) => [p.id, { name: p.name, device: p.device }])),
@@ -209,10 +218,13 @@ async function handle(req, res) {
       }
       if (msg.action === 'stop') {
         if (!room.session?.recording) return json(res, 409, { error: 'No se está grabando' });
-        const stopAt = now() + 300;
-        room.session = { ...room.session, recording: false, stopAt };
+        // Pitido final 1,5 s después de la orden (margen para que llegue por internet) y parada 1 s más tarde.
+        const t = now();
+        const endBeepAt = t + 1500;
+        const stopAt = t + 2500;
+        room.session = { ...room.session, recording: false, stopAt, endBeepAt };
         const s = sessions.get(`${roomName}/${room.session.id}`);
-        if (s) { s.stopAt = stopAt; saveSession(s); }
+        if (s) { s.stopAt = stopAt; s.endBeepAt = endBeepAt; saveSession(s); }
         broadcast(room, 'record-stop', room.session);
         return json(res, 200, room.session);
       }
@@ -307,6 +319,7 @@ async function handle(req, res) {
       startedAtServer: m.startedAtServer ?? null,
       endedAtServer: m.endedAtServer ?? null,
       beepOffsetSec: m.beepOffsetSec ?? null,
+      endBeepOffsetSec: m.endBeepOffsetSec ?? null,
       clockRttMs: m.clockRttMs ?? null,
       userAgent: String(m.userAgent || '').slice(0, 300),
     });
@@ -335,6 +348,53 @@ async function handle(req, res) {
   }
 
   return json(res, 404, { error: 'Ruta desconocida' });
+}
+
+// ---------------------------------------------------------------- WebSocket de la sala
+// ws(s)://…/api/rooms/:room/ws?peer=&name=&device=  → eventos del servidor en JSON {event, data}
+function attachSignaling(server) {
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, 'http://x');
+    const m = /^\/api\/rooms\/([^/]+)\/ws$/.exec(url.pathname);
+    if (!m) { socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, (ws) => onPeerSocket(ws, decodeURIComponent(m[1]), url.searchParams));
+  });
+  const ping = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.alive === false) { ws.terminate(); continue; }
+      ws.alive = false;
+      ws.ping();
+    }
+  }, 15000);
+  server.on('close', () => clearInterval(ping));
+  return wss;
+}
+
+function onPeerSocket(ws, rawRoom, params) {
+  const roomName = slug(rawRoom, 'sala');
+  const room = getRoom(roomName);
+  const id = slug(params.get('peer'), '');
+  ws.alive = true;
+  ws.on('pong', () => { ws.alive = true; });
+  if (!id) { ws.close(4000, 'Falta peer'); return; }
+  const existing = room.peers.get(id);
+  if (!existing && room.peers.size >= MAX_PEERS) {
+    ws.send(JSON.stringify({ event: 'room-full', data: { error: 'La sala está llena (máximo 2 personas)' } }));
+    ws.close(4009, 'Sala llena');
+    return;
+  }
+  if (existing) existing.ws.close(4001, 'Reemplazado');
+  const peer = { id, name: String(params.get('name') || 'Invitado').slice(0, 40), device: String(params.get('device') || '').slice(0, 40), ws };
+  room.peers.set(id, peer);
+  send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session });
+  broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device }, id);
+  ws.on('close', () => {
+    if (room.peers.get(id) !== peer) return;
+    room.peers.delete(id);
+    broadcast(room, 'peer-left', { id });
+    if (!room.peers.size && !room.session?.recording) rooms.delete(roomName);
+  });
 }
 
 function onRequest(req, res) {
@@ -380,23 +440,74 @@ async function loadOrCreateCert(ips) {
   return { key: pems.private, cert: pems.cert };
 }
 
+/** Abre un túnel HTTPS público de Cloudflare (sin cuenta) hacia el servidor local. */
+async function startTunnel() {
+  let cf;
+  try { cf = require('cloudflared'); } catch {
+    console.error('✗ Falta el componente del túnel. Ejecuta «npm install» y vuelve a probar.');
+    return;
+  }
+  if (!fs.existsSync(cf.bin)) {
+    console.log('   Descargando cloudflared (solo la primera vez)…');
+    await cf.install(cf.bin);
+  }
+  const t = cf.Tunnel.quick(`http://localhost:${HTTP_PORT}`);
+  const url = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Cloudflare no respondió en 60 s')), 60000);
+    t.once('url', (u) => { clearTimeout(timer); resolve(u); });
+    t.once('exit', (code) => { clearTimeout(timer); reject(new Error(`cloudflared terminó (código ${code})`)); });
+  });
+  publicUrl = url;
+  const line = '─'.repeat(url.length + 8);
+  console.log(`\n   ┌${line}┐\n   │  🌍  ${url}  │\n   └${line}┘`);
+  console.log('   Enlace público (cambia cada vez que arrancas). Ábrelo en ambos dispositivos o comparte');
+  console.log('   el «enlace de invitación» que aparece dentro del estudio.\n');
+  if (!hasTurn()) {
+    console.log('   Consejo: configura un servidor TURN en .env (ver .env.ejemplo) para que la llamada conecte');
+    console.log('   aunque alguna de las redes bloquee las conexiones directas.\n');
+  }
+  const stop = () => { try { t.stop(); } catch { /* ya parado */ } process.exit(0); };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  t.on('exit', (code) => { if (publicUrl === url) { publicUrl = ''; console.error(`⚠  El túnel se cerró (código ${code}). Reinicia con npm run internet.`); } });
+}
+
 async function main() {
   fs.mkdirSync(REC_DIR, { recursive: true });
   const ips = lanAddresses();
-  http.createServer(onRequest).listen(HTTP_PORT, () => {
-    console.log(`\n🎙  Estudio en marcha. Grabaciones en: ${REC_DIR}\n`);
-    console.log(`   En este PC:          http://localhost:${HTTP_PORT}`);
+  const httpServer = http.createServer(onRequest);
+  attachSignaling(httpServer);
+  await new Promise((r) => {
+    httpServer.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') console.error(`✗ El puerto ${HTTP_PORT} está ocupado: ¿ya tienes el estudio abierto en otra ventana? Ciérralo o usa PORT=8081.`);
+      else console.error(err);
+      process.exit(1);
+    });
+    httpServer.listen(HTTP_PORT, r);
   });
+  console.log(`\n🎙  Estudio en marcha. Grabaciones en: ${REC_DIR}\n`);
+  console.log(`   En este PC:          http://localhost:${HTTP_PORT}`);
   const tls = await loadOrCreateCert(ips);
   if (tls) {
-    https.createServer(tls, onRequest).listen(HTTPS_PORT, () => {
-      httpsReady = true;
-      for (const ip of ips) console.log(`   iPad (misma wifi):   https://${ip}:${HTTPS_PORT}`);
-      console.log('\n   El certificado es autofirmado: en el iPad pulsa «Mostrar detalles» → «visitar este sitio web».\n');
+    const httpsServer = https.createServer(tls, onRequest);
+    attachSignaling(httpsServer);
+    httpsReady = await new Promise((r) => {
+      httpsServer.once('error', () => { console.warn(`⚠  El puerto ${HTTPS_PORT} está ocupado: sin acceso por la wifi local.`); r(false); });
+      httpsServer.listen(HTTPS_PORT, () => r(true));
     });
+    if (httpsReady) for (const ip of ips) console.log(`   Misma wifi (iPad):   https://${ip}:${HTTPS_PORT}   (certificado autofirmado: «Mostrar detalles» → «visitar este sitio web»)`);
+  }
+  console.log(`   TURN: ${hasTurn() ? 'configurado ✓' : 'no configurado (opcional, ver .env.ejemplo)'}`);
+  if (process.argv.includes('--internet') || process.env.INTERNET === '1') {
+    console.log('\n   Abriendo enlace público por internet…');
+    try { await startTunnel(); } catch (err) {
+      console.error(`✗ No se pudo abrir el túnel: ${err.message}. Comprueba la conexión a internet (o un cortafuegos que bloquee cloudflared) y vuelve a probar.`);
+    }
+  } else {
+    console.log('\n   ¿La otra persona está en otra ciudad? Arranca con: npm run internet\n');
   }
 }
 
 if (require.main === module) main();
 
-module.exports = { onRequest };
+module.exports = { onRequest, attachSignaling };

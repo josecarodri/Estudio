@@ -22,6 +22,7 @@ const CRF = Number(opt('--crf', 18));
 const KEEP_BEEP = args.includes('--mantener-pitido');
 const DETECT_RATE = 16000;
 const SEARCH_SEC = 20;
+const MAX_DRIFT_PPM = 20000;  // más de un 2 % no es deriva de reloj sino un pitido mal detectado
 
 function run(cmd, cmdArgs, opts = {}) {
   const r = spawnSync(cmd, cmdArgs, { maxBuffer: 1024 * 1024 * 1024, ...opts });
@@ -33,14 +34,20 @@ function checkFfmpeg() {
   try { run('ffmpeg', ['-version']); run('ffprobe', ['-version']); return true; } catch { return false; }
 }
 
-/** Decodifica los primeros segundos a PCM mono (en la línea de tiempo del archivo) y busca el pitido. */
-function detectBeep(file) {
-  const r = run('ffmpeg', ['-v', 'error', '-i', file, '-t', String(SEARCH_SEC), '-vn', '-af', 'aresample=async=1:first_pts=0', '-ac', '1', '-ar', String(DETECT_RATE), '-f', 's16le', '-']);
+/**
+ * Decodifica un tramo a PCM mono (en la línea de tiempo del archivo) y busca el pitido.
+ * @param {number} [from] segundo desde el que buscar (para el pitido final)
+ */
+function detectBeep(file, from = 0) {
+  const r = run('ffmpeg', ['-v', 'error', '-i', file, '-vn', '-af',
+    `aresample=async=1:first_pts=0,atrim=start=${from.toFixed(3)}:duration=${SEARCH_SEC}`,
+    '-ac', '1', '-ar', String(DETECT_RATE), '-f', 's16le', '-']);
   if (r.status !== 0 || !r.stdout.length) return null;
   const buf = r.stdout;
   const x = new Float32Array(Math.floor(buf.length / 2));
   for (let i = 0; i < x.length; i++) x[i] = buf.readInt16LE(i * 2) / 32768;
-  return findBeep(x, DETECT_RATE);
+  const t = findBeep(x, DETECT_RATE);
+  return t == null ? null : from + t;
 }
 
 function probe(file) {
@@ -64,6 +71,7 @@ function alignSession(dir) {
   if (!fs.existsSync(metaFile)) return;
   const s = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
   console.log(`\n▶ Sesión ${s.id} (sala ${s.room})`);
+  const nominal = s.beepAt && s.endBeepAt ? (s.endBeepAt - s.beepAt) / 1000 : null;
 
   const items = [];
   for (const [id, t] of Object.entries(s.tracks || {})) {
@@ -79,13 +87,35 @@ function alignSession(dir) {
     const drift = expected != null ? ` (metadatos: ${expected.toFixed(3)} s)` : '';
     console.log(`  · ${t.file}: pitido en ${beep.toFixed(3)} s — ${source}${drift}`);
     const dur = duration(file);
-    items.push({ id, t, file, beep, person, dur, ...probe(file) });
+
+    // Deriva: cada dispositivo tiene su propio reloj de audio/vídeo y en una hora pueden separarse decenas de ms.
+    // Con el pitido final se mide cuánto dura en este archivo el intervalo que en el reloj común dura `nominal`
+    // y se estira o encoge la pista en esa proporción.
+    let ratio = 1;
+    let endBeep = null;
+    if (nominal && dur) {
+      const expectedEnd = beep + nominal;
+      endBeep = detectBeep(file, Math.max(0, expectedEnd - 3));
+      if (endBeep != null) {
+        const r = nominal / (endBeep - beep);
+        const ppm = (r - 1) * 1e6;
+        if (Math.abs(ppm) < MAX_DRIFT_PPM) {
+          ratio = r;
+          console.log(`      deriva ${ppm >= 0 ? '+' : ''}${ppm.toFixed(0)} ppm (${((endBeep - beep - nominal) * 1000).toFixed(1)} ms en ${nominal.toFixed(0)} s) → se corrige`);
+        } else {
+          console.log(`      pitido final incoherente (${ppm.toFixed(0)} ppm), no se corrige la deriva`);
+        }
+      } else {
+        console.log('      sin pitido final: no se corrige la deriva');
+      }
+    }
+    items.push({ id, t, file, beep, endBeep, ratio, person, dur, ...probe(file) });
   }
   if (!items.length) { console.log('  Nada que alinear.'); return; }
 
   // Todas las salidas empiezan LEAD segundos antes del pitido (lo máximo que permiten todas las pistas).
-  const lead = Math.max(0, Math.min(1, ...items.map((i) => i.beep)));
-  const durations = items.map((i) => (i.dur != null ? i.dur - (i.beep - lead) : null)).filter((d) => d != null && d > 0);
+  const lead = Math.max(0, Math.min(1, ...items.map((i) => i.beep * i.ratio)));
+  const durations = items.map((i) => (i.dur != null ? (i.dur - (i.beep - lead / i.ratio)) * i.ratio : null)).filter((d) => d != null && d > 0);
   const common = durations.length === items.length ? Math.min(...durations) : null;
   const outDir = path.join(dir, 'alineados');
   fs.mkdirSync(outDir, { recursive: true });
@@ -93,30 +123,44 @@ function alignSession(dir) {
   const report = [
     `Sesión ${s.id} · sala ${s.room}`,
     `Todas las pistas empiezan en el mismo instante. El pitido de sincronía está en ${lead.toFixed(3)} s${KEEP_BEEP ? '' : ' (silenciado)'}.`,
+    nominal ? `Pitido final en ${(lead + nominal).toFixed(3)} s: se usa para corregir la deriva entre dispositivos.` : '',
     common ? `Duración común: ${common.toFixed(2)} s` : 'Duración: la de cada pista',
     '',
   ];
 
   for (const it of items) {
-    const trim = it.beep - lead;
+    const R = it.ratio;
+    const trim = it.beep - lead / R;          // segundo del archivo original que pasa a ser el 0
     const base = path.basename(it.t.file, path.extname(it.t.file));
     const isWav = it.t.format === 'wav' || !it.hasVideo;
     const out = path.join(outDir, `${base}.${isWav ? 'wav' : 'mp4'}`);
-    const a = ['-y', '-v', 'error', '-stats', '-fflags', '+genpts', '-i', it.file, '-ss', trim.toFixed(4)];
+    const a = ['-y', '-v', 'error', '-stats', '-fflags', '+genpts', '-i', it.file];
     if (common) a.push('-t', common.toFixed(4));
-    const afilters = ['aresample=48000:async=1:first_pts=0'];
-    if (!KEEP_BEEP) afilters.push(`volume=enable='between(t,${(lead - 0.02).toFixed(3)},${(lead + 0.3).toFixed(3)})':volume=0`);
+    const afilters = [
+      'aresample=48000:async=1:first_pts=0',
+      `atrim=start=${trim.toFixed(6)}`,
+      `asetpts=(PTS-STARTPTS)*${R.toFixed(9)}`,
+      // Estira/encoge el audio con remuestreo suave para que coincida con las marcas de tiempo corregidas.
+      ...(R !== 1 ? ['aresample=48000:async=4800'] : []),
+    ];
+    if (!KEEP_BEEP) {
+      const mute = (at) => `volume=enable='between(t,${(at - 0.02).toFixed(3)},${(at + 0.3).toFixed(3)})':volume=0`;
+      afilters.push(mute(lead));
+      if (it.endBeep != null && nominal) afilters.push(mute(lead + nominal));
+    }
     if (isWav) {
       a.push('-vn', '-af', afilters.join(','), '-c:a', 'pcm_s24le', out);
     } else {
-      a.push('-vf', `fps=${FPS},format=yuv420p`, '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF), '-movflags', '+faststart');
+      const vfilters = [`trim=start=${trim.toFixed(6)}`, `setpts=(PTS-STARTPTS)*${R.toFixed(9)}`, `fps=${FPS}`, 'format=yuv420p'];
+      a.push('-vf', vfilters.join(','), '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF), '-movflags', '+faststart');
       if (it.hasAudio) a.push('-af', afilters.join(','), '-c:a', 'aac', '-b:a', '320k', '-ar', '48000');
       a.push(out);
     }
     console.log(`    → ${path.relative(process.cwd(), out)}`);
     const r = run('ffmpeg', a, { stdio: ['ignore', 'inherit', 'inherit'] });
     if (r.status !== 0) { console.log(`    ✗ ffmpeg falló con ${it.t.file}`); continue; }
-    report.push(`${path.basename(out)}  ←  ${it.t.file}  (${it.person}, recortado ${trim.toFixed(3)} s al inicio)`);
+    const driftTxt = R !== 1 ? `, deriva corregida ${((R - 1) * 1e6).toFixed(0)} ppm` : '';
+    report.push(`${path.basename(out)}  ←  ${it.t.file}  (${it.person}, recortado ${trim.toFixed(3)} s al inicio${driftTxt})`);
   }
   fs.writeFileSync(path.join(outDir, 'LEEME.txt'), report.join('\n') + '\n');
   console.log(`  ✓ Listo: ${path.relative(process.cwd(), outDir)}`);

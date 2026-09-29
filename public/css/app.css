@@ -55,6 +55,7 @@ label.check input { width: auto; margin-top: 3px; }
 .studio { padding: 16px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
 .studio-top { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
 .pill { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; margin-left: 6px; }
+.pill.bad { color: var(--warn); border-color: var(--warn); }
 .invite { display: flex; gap: 8px; flex: 1 1 360px; max-width: 560px; }
 .invite input { margin: 0; }
 .invite button { white-space: nowrap; }

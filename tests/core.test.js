@@ -6,7 +6,9 @@ const os = require('os');
 const path = require('path');
 const { slug, wavHeader, fixWavHeader, chunkDecision, extFromMime, sessionIdFromDate } = require('../lib/core');
 const { findBeep } = require('../lib/beep');
-const { computeOffset } = require('../public/js/clock');
+const Clock = require('../public/js/clock');
+const { computeOffset } = Clock;
+const { parseEnv } = require('../lib/env');
 
 test('slug limpia nombres y evita rutas', () => {
   assert.strictEqual(slug('José Ñandú'), 'jose-nandu');
@@ -76,4 +78,18 @@ test('detecta el pitido con precisión de milisegundos', () => {
 test('no confunde voz sin pitido', () => {
   const x = synth(16000, 99);
   assert.strictEqual(findBeep(x, 16000), null);
+});
+
+test('el reloj acumula muestras y usa la más rápida', () => {
+  const t = Clock.localNow();
+  Clock.addSample({ t0: t - 300, server: t + 5000 - 250, t1: t - 200 });   // rtt 100
+  Clock.addSample({ t0: t - 100, server: t + 5000 - 95, t1: t - 90 });     // rtt 10 → desfase 5000
+  const e = Clock.estimate();
+  assert.strictEqual(e.rtt, 10);
+  assert.strictEqual(e.offset, 5000);
+});
+
+test('lee el archivo .env', () => {
+  const env = parseEnv('# comentario\nA=1\nB = "dos tres"\n\nMAL\nC=x=y');
+  assert.deepStrictEqual(env, { A: '1', B: 'dos tres', C: 'x=y' });
 });

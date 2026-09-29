@@ -6,12 +6,17 @@
   "scripts": {
     "start": "node server.js",
     "alinear": "node tools/alinear.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "internet": "node server.js --internet"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "selfsigned": "^5.5.0"
+    "selfsigned": "^5.5.0",
+    "ws": "^8.22.0"
+  },
+  "optionalDependencies": {
+    "cloudflared": "^0.7.3"
   }
 }

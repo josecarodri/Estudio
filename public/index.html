@@ -61,6 +61,7 @@
         <span class="muted">Sala</span> <strong id="roomName"></strong>
         <span id="connInfo" class="pill"></span>
         <span id="clockInfo" class="pill"></span>
+        <span id="routeInfo" class="pill" hidden></span>
       </div>
       <div class="invite">
         <input id="inviteLink" readonly aria-label="Enlace de invitación">
@@ -93,6 +94,7 @@
       <h2>Archivos de este dispositivo</h2>
       <p class="muted small">Se graban aquí en alta calidad y se suben al servidor mientras grabas. Si se corta la conexión,
         quedan guardados en el dispositivo y la subida se reanuda sola.</p>
+      <p id="uploadWarning" class="warning" hidden></p>
       <div id="uploads"></div>
       <p id="remoteUploads" class="muted small"></p>
     </section>

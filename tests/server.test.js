@@ -7,32 +7,28 @@ const os = require('os');
 const path = require('path');
 
 process.env.GRABACIONES_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'rec-'));
-const { onRequest } = require('../server');
+const WebSocket = require('ws');
+const { onRequest, attachSignaling } = require('../server');
 
 function listen() {
-  return new Promise((resolve) => { const s = http.createServer(onRequest).listen(0, () => resolve(s)); });
+  return new Promise((resolve) => {
+    const s = http.createServer(onRequest);
+    attachSignaling(s);
+    s.listen(0, () => resolve(s));
+  });
 }
 
-/** Cliente SSE mínimo que acumula eventos. */
+/** Cliente WebSocket mínimo que acumula eventos. */
 function sse(base, pathQ) {
   const events = [];
   const waiters = [];
-  const req = http.get(base + pathQ, (res) => {
-    let buf = '';
-    res.on('data', (c) => {
-      buf += c;
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const block = buf.slice(0, i); buf = buf.slice(i + 2);
-        const ev = /event: (.*)/.exec(block); const data = /data: (.*)/.exec(block);
-        if (ev && data) {
-          const e = { event: ev[1], data: JSON.parse(data[1]) };
-          events.push(e);
-          waiters.splice(0).forEach((w) => w());
-        }
-      }
-    });
+  const ws = new WebSocket(base.replace('http', 'ws') + pathQ);
+  ws.on('message', (raw) => {
+    const m = JSON.parse(raw.toString());
+    events.push({ event: m.event, data: m.data });
+    waiters.splice(0).forEach((w) => w());
   });
+  const closed = new Promise((r) => ws.on('close', (code) => r(code)));
   const next = async (name) => {
     for (;;) {
       const idx = events.findIndex((e) => e.event === name);
@@ -40,7 +36,7 @@ function sse(base, pathQ) {
       await new Promise((r) => waiters.push(r));
     }
   };
-  return { next, close: () => req.destroy() };
+  return { next, closed, close: () => ws.close() };
 }
 
 const post = (base, p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, json: await r.json() }));
@@ -49,17 +45,18 @@ test('flujo completo: sala, señal, grabación y subida por trozos', async () =>
   const server = await listen();
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    const a = sse(base, '/api/rooms/prueba/events?peer=aaa&name=Ana&device=PC');
+    const a = sse(base, '/api/rooms/prueba/ws?peer=aaa&name=Ana&device=PC');
     const wa = await a.next('welcome');
     assert.deepStrictEqual(wa.peers, []);
-    const b = sse(base, '/api/rooms/prueba/events?peer=bbb&name=Beto&device=iPad');
+    const b = sse(base, '/api/rooms/prueba/ws?peer=bbb&name=Beto&device=iPad');
     const wb = await b.next('welcome');
     assert.strictEqual(wb.peers[0].name, 'Ana');
     assert.strictEqual((await a.next('peer-joined')).id, 'bbb');
 
     // Tercera persona: sala llena
-    const full = await fetch(`${base}/api/rooms/prueba/events?peer=ccc&name=X`);
-    assert.strictEqual(full.status, 409);
+    const c = sse(base, '/api/rooms/prueba/ws?peer=ccc&name=X');
+    assert.match((await c.next('room-full')).error, /llena/);
+    assert.strictEqual(await c.closed, 4009);
 
     // Señalización
     assert.strictEqual((await post(base, '/api/rooms/prueba/signal', { from: 'bbb', to: 'aaa', data: { hola: 1 } })).status, 200);
@@ -75,6 +72,7 @@ test('flujo completo: sala, señal, grabación y subida por trozos', async () =>
     const ev = await b.next('record-start');
     assert.strictEqual(ev.id, start.json.id);
     assert.strictEqual(ev.beepAt - ev.startAt, 1000);
+    await a.next('record-start');
 
     // Pista WAV de Beto
     const reg = await post(base, '/api/tracks', { room: 'prueba', session: ev.id, participant: 'bbb', name: 'Beto', kind: 'audio', format: 'wav', mime: 'audio/wav', sampleRate: 48000, channels: 1 });
@@ -101,7 +99,12 @@ test('flujo completo: sala, señal, grabación y subida por trozos', async () =>
 
     // Parar
     assert.strictEqual((await post(base, '/api/rooms/prueba/record', { action: 'stop' })).status, 200);
-    await a.next('record-stop');
+    const stop = await a.next('record-stop');
+    assert.ok(stop.endBeepAt < stop.stopAt && stop.stopAt - stop.endBeepAt >= 500);
+
+    // Al salir una persona, la otra se entera
+    b.close();
+    assert.strictEqual((await a.next('peer-left')).id, 'bbb');
 
     // Listado y descarga
     const list = await fetch(`${base}/api/sessions`).then((r) => r.json());
@@ -113,7 +116,10 @@ test('flujo completo: sala, señal, grabación y subida por trozos', async () =>
 
     // Rutas fuera de la carpeta
     assert.notStrictEqual((await fetch(`${base}/grabaciones/..%2F..%2Fetc%2Fpasswd`)).status, 200);
-    a.close(); b.close();
+    // Configuración: siempre hay STUN
+    const cfg = await fetch(`${base}/api/config`).then((r) => r.json());
+    assert.ok(cfg.iceServers.length >= 1);
+    a.close();
   } finally {
     server.closeAllConnections();
     server.close();

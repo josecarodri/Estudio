@@ -15,11 +15,12 @@
     <section class="card small">
       <h2>Cómo sincronizar en el editor</h2>
       <p>Todas las pistas de una sesión llevan un <strong>pitido de 1 kHz</strong> (claqueta digital) grabado a la misma hora exacta
-        en ambos dispositivos. En tu editor (Premiere, DaVinci Resolve, Final Cut…) alinea las pistas por ese pitido o por la
+        en ambos dispositivos, y otro 1 s antes del final. En tu editor (Premiere, DaVinci Resolve, Final Cut…) alinea las pistas por ese pitido o por la
         forma de onda; o colócalas desplazadas lo que indica la columna <em>Empieza en</em>.</p>
       <p>Para obtener archivos ya alineados, con la misma duración y a velocidad de fotogramas constante, ejecuta en el PC:
         <code>npm run alinear</code> (requiere <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">ffmpeg</a>).
-        En esos archivos el pitido queda silenciado (usa <code>--mantener-pitido</code> si lo quieres conservar).</p>
+        Además corrige la deriva entre los relojes de los dos dispositivos usando el pitido final.
+        En esos archivos los pitidos quedan silenciados (usa <code>--mantener-pitido</code> si lo quieres conservar).</p>
     </section>
     <div id="sessions"><p class="muted">Cargando…</p></div>
   </main>
