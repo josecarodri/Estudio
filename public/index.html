@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#111318">
+  <title>Estudio · Grabación local</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span> Estudio</div>
+    <nav><a href="grabaciones.html" target="_blank">Grabaciones</a></nav>
+  </header>
+
+  <!-- Preparación -->
+  <main id="setup" class="setup">
+    <section class="card preview-card">
+      <div class="video-wrap"><video id="preview" autoplay playsinline muted></video></div>
+      <div class="preview-bar">
+        <span id="previewInfo" class="muted">Pulsa «Probar cámara» para ver la vista previa</span>
+        <button id="btnPreview" type="button" class="secondary">Probar cámara</button>
+      </div>
+    </section>
+
+    <form id="setupForm" class="card form">
+      <h1>Entrar al estudio</h1>
+      <p id="secureWarning" class="warning" hidden>
+        Este navegador no permite usar la cámara aquí. Abre la dirección <strong>https://…:8443</strong> que muestra el
+        servidor (en el propio PC también vale <strong>http://localhost:8080</strong>).
+      </p>
+      <label>Tu nombre <input id="name" required maxlength="40" autocomplete="name" placeholder="Ej.: Ana"></label>
+      <label>Sala <input id="room" required maxlength="40" autocapitalize="off" autocomplete="off"></label>
+      <p class="muted small">Las dos personas deben entrar en la misma sala. Este dispositivo: <strong id="deviceLabel"></strong></p>
+      <label>Cámara <select id="camera"></select></label>
+      <label>Micrófono <select id="mic"></select></label>
+      <label>Calidad de vídeo local
+        <select id="resolution">
+          <option value="720">720p (1280×720)</option>
+          <option value="1080">1080p (1920×1080)</option>
+          <option value="2160">4K (3840×2160) si la cámara lo permite</option>
+        </select>
+      </label>
+      <label class="check"><input id="headphones" type="checkbox"> Uso auriculares (desactiva cancelación de eco y reducción de ruido: sonido más natural)</label>
+      <label class="check"><input id="recordCall" type="checkbox"> Grabar también la llamada en este dispositivo (las dos cámaras + audio mezclado)</label>
+      <button id="btnJoin" type="submit" class="primary">Entrar</button>
+
+      <div id="pending" class="pending" hidden>
+        <h2>Grabaciones sin terminar de subir</h2>
+        <p class="muted small">Quedaron guardadas en este dispositivo. Súbelas o descárgalas.</p>
+        <ul id="pendingList"></ul>
+      </div>
+    </form>
+  </main>
+
+  <!-- Estudio -->
+  <main id="studio" class="studio" hidden>
+    <div class="studio-top">
+      <div>
+        <span class="muted">Sala</span> <strong id="roomName"></strong>
+        <span id="connInfo" class="pill"></span>
+        <span id="clockInfo" class="pill"></span>
+      </div>
+      <div class="invite">
+        <input id="inviteLink" readonly aria-label="Enlace de invitación">
+        <button id="btnCopy" type="button" class="secondary">Copiar enlace</button>
+      </div>
+    </div>
+
+    <div class="tiles">
+      <div class="tile">
+        <video id="localVideo" autoplay playsinline muted></video>
+        <div class="tag"><span id="localName"></span></div>
+        <div class="meter"><div id="meter"></div></div>
+      </div>
+      <div class="tile">
+        <video id="remoteVideo" autoplay playsinline></video>
+        <div id="waiting" class="waiting">Esperando a la otra persona…<br><span class="muted small">Envíale el enlace de la sala</span></div>
+        <div class="tag"><span id="remoteName"></span> <span id="remoteState" class="muted"></span></div>
+      </div>
+      <div id="countdown" class="countdown" hidden></div>
+      <div id="recBadge" class="rec-badge" hidden>● REC</div>
+    </div>
+
+    <div class="controls">
+      <button id="btnMute" type="button" class="secondary">Silenciar</button>
+      <button id="btnRecord" type="button" class="record" data-mode="idle">● Grabar</button>
+      <span id="timer" class="timer">00:00:00</span>
+    </div>
+
+    <section class="card">
+      <h2>Archivos de este dispositivo</h2>
+      <p class="muted small">Se graban aquí en alta calidad y se suben al servidor mientras grabas. Si se corta la conexión,
+        quedan guardados en el dispositivo y la subida se reanuda sola.</p>
+      <div id="uploads"></div>
+      <p id="remoteUploads" class="muted small"></p>
+    </section>
+  </main>
+
+  <div id="flash" class="flash"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/clock.js"></script>
+  <script src="js/uploader.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

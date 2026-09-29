@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Estudio · Grabaciones</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span> Estudio · Grabaciones</div>
+    <nav><a href="./">Volver al estudio</a></nav>
+  </header>
+  <main class="list">
+    <section class="card small">
+      <h2>Cómo sincronizar en el editor</h2>
+      <p>Todas las pistas de una sesión llevan un <strong>pitido de 1 kHz</strong> (claqueta digital) grabado a la misma hora exacta
+        en ambos dispositivos. En tu editor (Premiere, DaVinci Resolve, Final Cut…) alinea las pistas por ese pitido o por la
+        forma de onda; o colócalas desplazadas lo que indica la columna <em>Empieza en</em>.</p>
+      <p>Para obtener archivos ya alineados, con la misma duración y a velocidad de fotogramas constante, ejecuta en el PC:
+        <code>npm run alinear</code> (requiere <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">ffmpeg</a>).
+        En esos archivos el pitido queda silenciado (usa <code>--mantener-pitido</code> si lo quieres conservar).</p>
+    </section>
+    <div id="sessions"><p class="muted">Cargando…</p></div>
+  </main>
+  <script>
+    const fmtBytes = (n) => n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const KIND = { camara: 'Cámara (alta calidad)', audio: 'Audio WAV', llamada: 'Llamada (referencia)' };
+
+    fetch('/api/sessions').then((r) => r.json()).then((list) => {
+      const box = document.getElementById('sessions');
+      if (!list.length) { box.innerHTML = '<p class="muted">Todavía no hay grabaciones.</p>'; return; }
+      box.innerHTML = '';
+      for (const s of list) {
+        const rows = Object.entries(s.tracks || {}).map(([id, t]) => {
+          const p = s.participants[t.participant] || {};
+          const file = s.files.find((f) => f.name === t.file);
+          const offset = t.startedAtServer != null && s.startAt ? ((t.startedAtServer - s.startAt) / 1000) : null;
+          return `<tr>
+            <td>${esc(p.name)}<br><span class="muted">${esc(p.device)}</span></td>
+            <td>${KIND[t.kind] || esc(t.kind)}</td>
+            <td>${file ? `<a href="${file.url}">${esc(t.file)}</a><br><span class="muted">${fmtBytes(file.bytes)}</span>` : esc(t.file)}</td>
+            <td>${offset == null ? '—' : `${offset >= 0 ? '+' : ''}${offset.toFixed(3)} s`}</td>
+            <td>${t.beepOffsetSec == null ? '—' : `${t.beepOffsetSec.toFixed(3)} s`}</td>
+            <td>${t.complete ? '✓ completo' : '<span style="color:var(--warn)">subiendo / incompleto</span>'}</td>
+          </tr>`;
+        }).join('');
+        const card = document.createElement('section');
+        card.className = 'card';
+        card.innerHTML = `<h2>${esc(s.id)} <span class="pill">sala ${esc(s.room)}</span></h2>
+          <table><thead><tr><th>Persona</th><th>Pista</th><th>Archivo</th><th>Empieza en</th><th>Pitido en</th><th>Estado</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="6" class="muted">Sin pistas</td></tr>'}</tbody></table>
+          <p class="muted small">Carpeta: <code>grabaciones/${esc(s.room)}/${esc(s.id)}/</code> · alinear solo esta sesión:
+          <code>npm run alinear -- grabaciones/${esc(s.room)}/${esc(s.id)}</code></p>`;
+        box.appendChild(card);
+      }
+    }).catch((e) => { document.getElementById('sessions').textContent = `Error: ${e.message}`; });
+  </script>
+</body>
+</html>
