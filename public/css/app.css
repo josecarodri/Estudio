@@ -77,6 +77,7 @@ body.recording .tile { border-color: var(--rec); }
 .controls { display: flex; justify-content: center; align-items: center; gap: 16px; flex-wrap: wrap; }
 .record { background: var(--rec); border-color: var(--rec); font-weight: 700; font-size: 17px; padding: 14px 32px; border-radius: 999px; min-width: 180px; }
 .record[data-mode="recording"] { background: var(--panel-2); border-color: var(--rec); color: var(--rec); }
+.record.confirm { background: var(--warn); border-color: var(--warn); color: #111; font-size: 15px; }
 .timer { font-variant-numeric: tabular-nums; font-size: 22px; min-width: 110px; }
 
 .upload { padding: 10px 0; border-top: 1px solid var(--line); }

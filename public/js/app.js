@@ -671,6 +671,7 @@
   function setRecordingUi(mode) {
     const btn = $('#btnRecord');
     btn.dataset.mode = mode;
+    btn.classList.remove('confirm');
     btn.textContent = { idle: '● Grabar', armed: 'Preparando…', stopping: 'Terminando…' }[mode] || '■ Detener';
     btn.disabled = mode === 'armed' || mode === 'stopping';
     $('#recBadge').hidden = mode !== 'recording' && mode !== 'stopping';
@@ -812,14 +813,28 @@
 
   // ------------------------------------------------------------------ eventos de la interfaz
   function initStudio() {
+    // Confirmación en dos pulsaciones dentro del propio botón. No se usa confirm(): mientras una ventana
+    // modal está abierta el navegador pausa la página y la imagen grabada se queda congelada.
+    let pending = null;
+    const armConfirm = (action, label) => {
+      const btn = $('#btnRecord');
+      pending = action;
+      btn.textContent = label;
+      btn.classList.add('confirm');
+      clearTimeout(armConfirm.t);
+      armConfirm.t = setTimeout(() => { if (pending === action) { pending = null; btn.classList.remove('confirm'); setRecordingUi(btn.dataset.mode); } }, 4000);
+    };
     $('#btnRecord').addEventListener('click', async () => {
-      const mode = $('#btnRecord').dataset.mode || 'idle';
+      const btn = $('#btnRecord');
+      const mode = btn.dataset.mode || 'idle';
       try {
         if (mode === 'idle') {
-          if (!state.remote && !confirm('Estás solo en la sala. ¿Grabar igualmente?')) return;
+          if (!state.remote && pending !== 'start') { armConfirm('start', 'Estás solo: pulsa otra vez para grabar'); return; }
+          pending = null; btn.classList.remove('confirm');
           await requestRecord('start');
         } else if (mode === 'recording') {
-          if (!confirm('¿Detener la grabación para los dos?')) return;
+          if (pending !== 'stop') { armConfirm('stop', '¿Detener para los dos? Pulsa otra vez'); return; }
+          pending = null; btn.classList.remove('confirm');
           await requestRecord('stop');
         }
       } catch (err) { toast(err.message, 'error'); }
