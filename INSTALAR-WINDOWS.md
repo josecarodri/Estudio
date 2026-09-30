@@ -66,7 +66,10 @@ universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
 
 1. Crea una cuenta gratuita en https://dash.cloudflare.com (el plan gratuito de
    TURN incluye 1000 GB al mes, de sobra para vuestras llamadas).
-2. En el menú de la izquierda entra en **Realtime** → **TURN Server** → **Create** (ponle un nombre, p. ej. «Estudio»).
+2. En el menú de la izquierda entra en **Realtime** → **TURN Server**. La primera vez Cloudflare pide **suscribirse**
+   con un método de pago (tarjeta o PayPal) aunque el total sea **$0.00**: solo cobra si pasas de 1000 GB al mes
+   ($0.05 por GB extra). Una hora de llamada por TURN gasta del orden de 1–3 GB.
+   Después pulsa **Create** (ponle un nombre, p. ej. «Estudio»).
 3. Cloudflare te muestra dos valores: **Turn Token ID** y **API Token**. Cópialos en un lugar seguro: el API Token
    solo se muestra una vez (si lo pierdes, crea otra clave).
 4. En la carpeta `estudio`, doble clic en **`Configurar TURN (Windows).bat`**, pega cada valor cuando lo pida
