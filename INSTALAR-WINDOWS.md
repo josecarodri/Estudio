@@ -64,8 +64,8 @@ También puedes verlas y descargarlas desde el enlace **Grabaciones** (arriba a 
 Si alguna vez el estudio avisa de que **la llamada no conecta** (pasa con algunas redes de móvil, empresa o
 universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
 
-1. Crea una cuenta gratuita en https://dash.cloudflare.com (solo correo y contraseña; no pide tarjeta para el plan
-   gratuito de TURN, 1000 GB al mes).
+1. Crea una cuenta gratuita en https://dash.cloudflare.com (el plan gratuito de
+   TURN incluye 1000 GB al mes, de sobra para vuestras llamadas).
 2. En el menú de la izquierda entra en **Realtime** → **TURN Server** → **Create** (ponle un nombre, p. ej. «Estudio»).
 3. Cloudflare te muestra dos valores: **Turn Token ID** y **API Token**. Cópialos en un lugar seguro: el API Token
    solo se muestra una vez (si lo pierdes, crea otra clave).
