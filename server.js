@@ -506,6 +506,19 @@ async function main() {
   } else {
     console.log('\n   ¿La otra persona está en otra ciudad? Arranca con: npm run internet\n');
   }
+  if (process.argv.includes('--abrir')) openBrowser(`http://localhost:${HTTP_PORT}`);
+}
+
+/** Abre el estudio en el navegador predeterminado (para los accesos directos de doble clic). */
+function openBrowser(url) {
+  const { spawn } = require('child_process');
+  const [cmd, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+    : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try {
+    const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    p.on('error', () => {});
+    p.unref();
+  } catch { /* sin navegador: se abre a mano */ }
 }
 
 if (require.main === module) main();

@@ -1,0 +1,87 @@
+# Instalar Estudio en Windows, paso a paso
+
+Solo hay que instalarlo en **el PC que hace de estudio**. La otra persona (con el iPad) no instala nada: abre un enlace
+en Safari.
+
+## 1. Instalar Node.js (una sola vez)
+
+1. Entra en https://nodejs.org/es/download y descarga el instalador **LTS** para Windows (archivo `.msi`).
+2. Ábrelo y pulsa **Siguiente** en todas las pantallas, dejando las opciones que vienen marcadas.
+3. Cuando termine, **reinicia el PC** (o al menos cierra y vuelve a abrir la sesión) para que Windows lo reconozca.
+
+> Alternativa rápida: abre **PowerShell** (tecla Windows → escribe «PowerShell» → Intro) y escribe
+> `winget install OpenJS.NodeJS.LTS`.
+
+## 2. Descargar Estudio
+
+1. Entra en https://github.com/josecarodri/Personal con tu cuenta de GitHub.
+2. Arriba a la izquierda, en el botón de la rama (pone `main`), elige **`claude/lucid-gauss-i65810`**
+   (cuando esté fusionado en `main` no hará falta este paso).
+3. Pulsa el botón verde **Code → Download ZIP**.
+4. Antes de descomprimir: clic derecho sobre el ZIP → **Propiedades** → marca **Desbloquear** (abajo) → **Aceptar**.
+   Así Windows no bloqueará los archivos de doble clic.
+5. Clic derecho → **Extraer todo…** y elige una carpeta cómoda, por ejemplo `Documentos`.
+6. Entra en la carpeta extraída y después en **`estudio`**. Todo lo demás se hace desde ahí.
+
+## 3. Instalar (una sola vez)
+
+Doble clic en **`Instalar (Windows).bat`**.
+
+- Se abre una ventana negra que descarga lo necesario (1–2 minutos). Al final pone **«Listo»**; pulsa una tecla.
+- Si Windows muestra **«Windows protegió su PC»**: pulsa **Más información → Ejecutar de todas formas**.
+- Si dice que no encuentra Node.js, vuelve al paso 1 (y reinicia el PC).
+
+## 4. Grabar con alguien en otra ciudad
+
+1. Doble clic en **`Estudio por internet (Windows).bat`**.
+2. La primera vez, Windows pregunta si permites a **Node.js** acceder a la red: marca **Redes privadas** y pulsa
+   **Permitir**.
+3. Se abre el navegador con el estudio. En la ventana negra aparece un recuadro con el enlace público
+   (`https://….trycloudflare.com`).
+4. En el navegador escribe tu nombre y pulsa **Entrar**. Pulsa **Copiar enlace** y envíaselo a la otra persona
+   (WhatsApp, correo…). Ella lo abre en **Safari** en el iPad, pone su nombre y pulsa **Entrar**.
+5. Pulsa **● Grabar**. Al terminar, **■ Detener** y esperad a que los dos pongan **✓ Guardado en el servidor**.
+
+> **No cierres la ventana negra** mientras grabáis ni hasta que termine la subida: es el estudio. Para apagarlo,
+> ciérrala cuando acabéis. El enlace cambia cada vez que lo arrancas, así que envía el nuevo en cada sesión.
+
+Si la otra persona está en tu misma casa o red, usa en su lugar **`Estudio misma wifi (Windows).bat`**.
+
+## 5. Dónde están las grabaciones
+
+En la carpeta **`estudio\grabaciones`**, una subcarpeta por sala y otra por cada grabación (fecha y hora).
+También puedes verlas y descargarlas desde el enlace **Grabaciones** (arriba a la derecha en el estudio).
+
+## 6. (Opcional) Alinear automáticamente para el editor
+
+1. Instala **ffmpeg** una vez: abre **PowerShell** y escribe `winget install Gyan.FFmpeg` (acepta con `Y`).
+   Cierra PowerShell cuando termine.
+2. Doble clic en **`Alinear grabaciones (Windows).bat`**. Crea en cada grabación una carpeta **`alineados`** con los
+   archivos ya sincronizados (MP4 a 30 fps y WAV), listos para Premiere, DaVinci Resolve, etc.
+
+## 7. (Recomendado) Servidor TURN para que la llamada conecte siempre
+
+Si alguna vez el estudio avisa de que **la llamada no conecta** (pasa con algunas redes de móvil, empresa o
+universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
+
+1. Crea una cuenta gratuita en https://dash.cloudflare.com → **Realtime** → **TURN Server** → crea una clave.
+2. En la carpeta `estudio`, copia el archivo `.env.ejemplo` y llama a la copia **`.env`**
+   (si no ves `.env.ejemplo`: en el Explorador, **Vista → Mostrar → Elementos ocultos**; si Windows no deja un nombre
+   que empieza por punto, escríbelo como `.env.` y lo corrige solo).
+3. Ábrelo con el Bloc de notas y pega los dos valores de Cloudflare:
+   ```
+   CLOUDFLARE_TURN_KEY_ID=...
+   CLOUDFLARE_TURN_API_TOKEN=...
+   ```
+4. Guarda y vuelve a abrir el estudio. En la ventana negra debe poner **`TURN: configurado ✓`**.
+
+## Problemas frecuentes
+
+| Qué pasa | Qué hacer |
+|---|---|
+| «No se encuentra Node.js» | Instala Node.js (paso 1) y reinicia el PC. |
+| «El puerto 8080 está ocupado» | Ya tienes el estudio abierto en otra ventana negra: ciérrala y vuelve a empezar. |
+| «No se pudo abrir el túnel» | Comprueba la conexión a internet; si tu antivirus bloquea `cloudflared`, permítelo. |
+| El navegador no pide cámara | Abre siempre el estudio en el PC como `http://localhost:8080` (lo hace el doble clic). |
+| La otra persona ve «sala llena» | Solo caben dos personas; cierra pestañas del estudio abiertas de más. |
+| La subida va lenta | Es normal con poca subida en el iPad: se guarda allí y termina al acabar. No cerréis Safari. |

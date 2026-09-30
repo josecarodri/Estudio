@@ -37,11 +37,14 @@ Por cada persona, en `grabaciones/<sala>/<fecha_hora>/` del PC:
 
 El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graba en MP4 si puede y si no en WebM.
 
+> **¿Usas Windows?** Sigue la guía paso a paso [INSTALAR-WINDOWS.md](INSTALAR-WINDOWS.md): se instala y se
+> arranca con doble clic, sin escribir comandos.
+
 ## Requisitos
 
 - **En el PC (anfitrión):** Windows, Mac o Linux con **Node.js 18 o superior** (https://nodejs.org) y Chrome o Edge.
 - **En el iPad (invitado):** Safari, iPadOS 16.4 o superior recomendado. No hay que instalar nada.
-- Opcional, para `npm run alinear`: **ffmpeg** (`winget install ffmpeg` en Windows, `brew install ffmpeg` en Mac).
+- Opcional, para `npm run alinear`: **ffmpeg** (`winget install Gyan.FFmpeg` en Windows, `brew install ffmpeg` en Mac).
 - Para la mejor calidad de audio: **auriculares** en los dos lados.
 - Conexión: para 1080p conviene que el invitado tenga **≥ 12 Mbps de subida**. Si tiene menos no se pierde nada: lo
   que no da tiempo a subir se guarda en su iPad y se termina de subir al acabar (o elige 720p).
