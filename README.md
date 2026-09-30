@@ -100,6 +100,8 @@ para verse y oírse hace falta un servidor TURN que retransmita la llamada. La o
    CLOUDFLARE_TURN_API_TOKEN=...
    ```
 3. Reinicia `npm run internet`. Al arrancar debe decir `TURN: configurado ✓`.
+   Puedes comprobarlo antes con `npm run probar-turn`. En Windows, el doble clic en
+   `Configurar TURN (Windows).bat` hace los pasos 2 y la comprobación por ti.
 
 También sirve cualquier otro TURN (coturn propio, Metered, Twilio…) con `TURN_URL`, `TURN_USER` y `TURN_PASS`.
 Recomendado configurarlo antes de una grabación importante.

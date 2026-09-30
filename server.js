@@ -523,4 +523,4 @@ function openBrowser(url) {
 
 if (require.main === module) main();
 
-module.exports = { onRequest, attachSignaling };
+module.exports = { onRequest, attachSignaling, iceServers, hasTurn };

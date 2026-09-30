@@ -7,7 +7,8 @@
     "start": "node server.js",
     "alinear": "node tools/alinear.js",
     "test": "node --test tests/*.test.js",
-    "internet": "node server.js --internet"
+    "internet": "node server.js --internet",
+    "probar-turn": "node tools/probar-turn.js"
   },
   "engines": {
     "node": ">=18"

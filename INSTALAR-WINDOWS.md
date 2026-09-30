@@ -64,16 +64,34 @@ También puedes verlas y descargarlas desde el enlace **Grabaciones** (arriba a 
 Si alguna vez el estudio avisa de que **la llamada no conecta** (pasa con algunas redes de móvil, empresa o
 universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
 
-1. Crea una cuenta gratuita en https://dash.cloudflare.com → **Realtime** → **TURN Server** → crea una clave.
-2. En la carpeta `estudio`, copia el archivo `.env.ejemplo` y llama a la copia **`.env`**
-   (si no ves `.env.ejemplo`: en el Explorador, **Vista → Mostrar → Elementos ocultos**; si Windows no deja un nombre
-   que empieza por punto, escríbelo como `.env.` y lo corrige solo).
-3. Ábrelo con el Bloc de notas y pega los dos valores de Cloudflare:
-   ```
-   CLOUDFLARE_TURN_KEY_ID=...
-   CLOUDFLARE_TURN_API_TOKEN=...
-   ```
-4. Guarda y vuelve a abrir el estudio. En la ventana negra debe poner **`TURN: configurado ✓`**.
+1. Crea una cuenta gratuita en https://dash.cloudflare.com (solo correo y contraseña; no pide tarjeta para el plan
+   gratuito de TURN, 1000 GB al mes).
+2. En el menú de la izquierda entra en **Realtime** → **TURN Server** → **Create** (ponle un nombre, p. ej. «Estudio»).
+3. Cloudflare te muestra dos valores: **Turn Token ID** y **API Token**. Cópialos en un lugar seguro: el API Token
+   solo se muestra una vez (si lo pierdes, crea otra clave).
+4. En la carpeta `estudio`, doble clic en **`Configurar TURN (Windows).bat`**, pega cada valor cuando lo pida
+   (clic derecho en la ventana para pegar) y pulsa Intro. Al final comprueba la conexión con Cloudflare y debe poner
+   **«✓ TURN configurado correctamente»**.
+5. Vuelve a abrir el estudio. En la ventana negra debe poner **`TURN: configurado ✓`**.
+
+Los valores se guardan en el archivo `estudio\.env`, que solo está en tu PC (no se sube a GitHub). No los compartas:
+quien los tenga puede usar tu cuota de Cloudflare.
+
+<details><summary>Hacerlo a mano en lugar del doble clic</summary>
+
+Crea en la carpeta `estudio` un archivo llamado `.env` (con el Bloc de notas: **Guardar como** → Tipo **Todos los
+archivos** → nombre `.env`) con estas dos líneas, sin espacios ni comillas:
+
+```
+CLOUDFLARE_TURN_KEY_ID=el-turn-token-id
+CLOUDFLARE_TURN_API_TOKEN=el-api-token
+```
+
+Para comprobarlo: en esa carpeta, abre PowerShell y escribe `npm run probar-turn`.
+
+Si usas otro servidor TURN (coturn propio, Metered, Twilio…), en su lugar pon `TURN_URL=turn:servidor:3478`,
+`TURN_USER=…` y `TURN_PASS=…`.
+</details>
 
 ## Problemas frecuentes
 
@@ -84,4 +102,5 @@ universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
 | «No se pudo abrir el túnel» | Comprueba la conexión a internet; si tu antivirus bloquea `cloudflared`, permítelo. |
 | El navegador no pide cámara | Abre siempre el estudio en el PC como `http://localhost:8080` (lo hace el doble clic). |
 | La otra persona ve «sala llena» | Solo caben dos personas; cierra pestañas del estudio abiertas de más. |
+| «No se pudieron obtener credenciales TURN» | Vuelve a ejecutar `Configurar TURN (Windows).bat` y pega bien los dos valores (o crea una clave nueva en Cloudflare). |
 | La subida va lenta | Es normal con poca subida en el iPad: se guarda allí y termina al acabar. No cerréis Safari. |
