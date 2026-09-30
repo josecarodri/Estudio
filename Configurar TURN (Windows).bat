@@ -2,6 +2,10 @@
 chcp 65001 >nul
 title Estudio - Configurar servidor TURN
 cd /d "%~dp0"
+if not exist node_modules\ws\ (
+  echo  Instalando lo necesario la primera vez...
+  call npm install
+)
 echo.
 echo  Configurar Cloudflare TURN
 echo  -------------------------
