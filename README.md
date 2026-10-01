@@ -106,12 +106,20 @@ para verse y oírse hace falta un servidor TURN que retransmita la llamada. La o
 También sirve cualquier otro TURN (coturn propio, Metered, Twilio…) con `TURN_URL`, `TURN_USER` y `TURN_PASS`.
 Recomendado configurarlo antes de una grabación importante.
 
-### ¿Prefieres una dirección fija?
+### ¿Prefieres una dirección fija? (Tailscale Funnel)
 
-El enlace de `trycloudflare.com` es gratuito y sin cuenta, pero cambia en cada arranque. Si quieres una dirección fija
-puedes crear un *túnel con nombre* de Cloudflare hacia `http://localhost:8080` (o usar ngrok, Tailscale Funnel…) y
-poner su dirección en `.env` como `PUBLIC_URL=https://estudio.midominio.com` para que el enlace de invitación la use.
-Arranca entonces con `npm start`.
+Con `PUBLICO=tailscale` en `.env` (o `node server.js --tailscale`) el estudio se publica con **Tailscale Funnel** en
+`https://<tu-pc>.<tu-red>.ts.net`, siempre la misma dirección. Requiere Tailscale instalado en el PC con sesión
+iniciada; la primera vez pide activar Funnel en el navegador. Ver [INSTALAR-WINDOWS.md](INSTALAR-WINDOWS.md#8-opcional-enlace-fijo-con-tailscale-funnel).
+El enlace solo responde mientras el estudio está abierto.
+
+Otra opción: un túnel con nombre de Cloudflare o ngrok hacia `http://localhost:8090` y `PUBLIC_URL=https://…` en `.env`.
+
+### Seguridad del enlace público
+
+Los túneles apuntan a un puerto interno (8090, solo accesible desde el propio PC) que **exige la clave secreta** del
+enlace de invitación (`&k=…`, guardada en `.env` como `CLAVE_ACCESO`) y **no da acceso a las grabaciones**: estas solo
+se ven desde `http://localhost:8080` en el PC del estudio.
 
 ## Uso en la misma wifi
 
@@ -176,5 +184,5 @@ tools/alinear.js         Alineado, corrección de deriva y conversión con ffmpe
 tests/                   Pruebas (npm test)
 ```
 
-Variables (en `.env` o en el entorno): `PORT` (8080), `HTTPS_PORT` (8443), `GRABACIONES_DIR`, `PUBLIC_URL`,
+Variables (en `.env` o en el entorno): `PORT` (8080), `HTTPS_PORT` (8443), `GRABACIONES_DIR`, `PUBLIC_URL`, `PUBLICO` (`cloudflare`/`tailscale`), `CLAVE_ACCESO`, `PUBLIC_PORT` (8090),
 `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `TURN_URL`, `TURN_USER`, `TURN_PASS`.

@@ -125,3 +125,47 @@ test('flujo completo: sala, señal, grabación y subida por trozos', async () =>
     server.close();
   }
 });
+
+test('acceso público: exige la clave y nunca muestra las grabaciones', async () => {
+  const { onPublicRequest, ACCESS_KEY } = require('../server');
+  const pub = http.createServer(onPublicRequest);
+  attachSignaling(pub, { requireKey: true });
+  await new Promise((r) => pub.listen(0, r));
+  const local = await listen();
+  const P = `http://127.0.0.1:${pub.address().port}`;
+  const L = `http://127.0.0.1:${local.address().port}`;
+  try {
+    assert.strictEqual((await fetch(`${P}/?sala=x`)).status, 403);
+    assert.strictEqual((await fetch(`${P}/?sala=x&k=mala`)).status, 403);
+    const ok = await fetch(`${P}/?sala=x&k=${ACCESS_KEY}`);
+    assert.strictEqual(ok.status, 200);
+    const cookie = ok.headers.get('set-cookie').split(';')[0];
+    assert.match(cookie, /^estudio_k=/);
+    // Con la cookie funcionan el resto de archivos y la API…
+    assert.strictEqual((await fetch(`${P}/js/app.js`, { headers: { cookie } })).status, 200);
+    const cfg = await fetch(`${P}/api/config`, { headers: { cookie } }).then((r) => r.json());
+    assert.strictEqual(cfg.accessKey, undefined);   // la clave no se revela por el túnel
+    // …pero nunca las grabaciones
+    for (const p of ['/api/sessions', '/grabaciones/x/y/z.wav', '/grabaciones.html']) {
+      assert.strictEqual((await fetch(P + p, { headers: { cookie } })).status, 403, p);
+    }
+    // La sala por WebSocket también exige la clave
+    const denied = await new Promise((r) => {
+      const ws = new WebSocket(`${P.replace('http', 'ws')}/api/rooms/x/ws?peer=zz`);
+      ws.on('unexpected-response', (_q, res) => r(res.statusCode));
+      ws.on('open', () => r('abierto'));
+      ws.on('error', () => {});
+    });
+    assert.strictEqual(denied, 403);
+    const c = sse(P, `/api/rooms/x/ws?peer=zz&k=${ACCESS_KEY}`);
+    assert.deepStrictEqual((await c.next('welcome')).peers, []);
+    c.close();
+
+    // En el PC del estudio sí se ven, salvo que la petición venga reenviada por un túnel
+    assert.strictEqual((await fetch(`${L}/api/sessions`)).status, 200);
+    assert.strictEqual((await fetch(`${L}/api/sessions`, { headers: { 'x-forwarded-for': '1.2.3.4' } })).status, 403);
+    assert.strictEqual((await fetch(`${L}/api/config`).then((r) => r.json())).accessKey, ACCESS_KEY);
+  } finally {
+    for (const s of [pub, local]) { s.closeAllConnections(); s.close(); }
+  }
+});

@@ -81,6 +81,8 @@
     $('#headphones').addEventListener('change', () => state.localStream && startPreview().catch(showMediaError));
     $('#setupForm').addEventListener('submit', (e) => { e.preventDefault(); join().catch((err) => { console.error(err); toast(err.message, 'error'); }); });
     checkStoredUploads();
+    // Las grabaciones solo se ven en el PC del estudio: el enlace solo aparece allí.
+    fetch('/api/config').then((r) => r.json()).then((c) => { $('#linkGrabaciones').hidden = !c.accessKey; }).catch(() => {});
   }
 
   function showMediaError(err) {
@@ -244,6 +246,7 @@
       if (cfg?.iceServers) state.iceServers = cfg.iceServers;
       state.lanUrls = cfg?.lanUrls || [];
       state.publicUrl = cfg?.publicUrl || '';
+      state.accessKey = cfg?.accessKey || '';
       state.hasTurn = !!cfg?.turn;
       state.clock = await Clock.sample(12);
     } finally {
@@ -252,7 +255,9 @@
     // Muestras de reloj continuas (ligeras): la estimación usa la más rápida del último minuto.
     setInterval(() => { Clock.sample(2).then(updateClock).catch(() => {}); }, 5000);
 
-    history.replaceState(null, '', `?sala=${encodeURIComponent(room)}`);
+    // Se conserva la clave en la dirección para que funcione al guardarla en la pantalla de inicio del iPad.
+    const k = new URLSearchParams(location.search).get('k');
+    history.replaceState(null, '', `?sala=${encodeURIComponent(room)}${k ? `&k=${encodeURIComponent(k)}` : ''}`);
     $('#setup').hidden = true;
     $('#studio').hidden = false;
     $('#roomName').textContent = room;
@@ -277,7 +282,9 @@
     // Prioridad: enlace público de internet; desde localhost, la IP del PC en la red local; si no, esta misma dirección.
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
     const origin = state.publicUrl || (local && state.lanUrls?.length ? state.lanUrls[0] : location.origin);
-    return `${origin}${location.pathname}?sala=${encodeURIComponent(state.room)}`;
+    // El enlace público lleva la clave de acceso; sin ella el estudio no se abre desde internet.
+    const key = state.publicUrl ? (state.accessKey || '') : (new URLSearchParams(location.search).get('k') || '');
+    return `${origin}${location.pathname}?sala=${encodeURIComponent(state.room)}${key ? `&k=${encodeURIComponent(key)}` : ''}`;
   }
 
   /** Canal de eventos de la sala por WebSocket, con reconexión automática. */
@@ -843,7 +850,7 @@
     $('#btnCopy').addEventListener('click', async () => {
       // El enlace público puede haber llegado después de entrar (el túnel tarda unos segundos).
       const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
-      if (cfg) { state.publicUrl = cfg.publicUrl || ''; state.lanUrls = cfg.lanUrls || []; $('#inviteLink').value = inviteUrl(); }
+      if (cfg) { state.publicUrl = cfg.publicUrl || ''; state.accessKey = cfg.accessKey || ''; state.lanUrls = cfg.lanUrls || []; $('#inviteLink').value = inviteUrl(); }
       try { await navigator.clipboard.writeText($('#inviteLink').value); toast('Enlace copiado'); } catch { $('#inviteLink').select(); }
     });
     $('#btnMute').addEventListener('click', () => {

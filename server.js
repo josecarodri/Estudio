@@ -23,6 +23,10 @@ const { slug, sessionIdFromDate, wavHeader, fixWavHeader, chunkDecision, extFrom
 
 const HTTP_PORT = Number(process.env.PORT || 8080);
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 8443);
+// Puerto interno (solo 127.0.0.1) al que apuntan los túneles públicos (Cloudflare / Tailscale Funnel).
+// Por aquí se exige la clave de acceso y no se pueden ver ni descargar grabaciones.
+const PUBLIC_PORT = Number(process.env.PUBLIC_PORT || 8090);
+const ENV_FILE = path.join(__dirname, '.env');
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const REC_DIR = path.resolve(process.env.GRABACIONES_DIR || path.join(ROOT, 'grabaciones'));
@@ -31,6 +35,7 @@ const MAX_CHUNK = 64 * 1024 * 1024;
 const MAX_PEERS = 2;
 
 const now = () => performance.timeOrigin + performance.now();
+const ACCESS_KEY = ensureAccessKey();
 let httpsReady = false;
 let publicUrl = process.env.PUBLIC_URL || '';
 
@@ -162,6 +167,10 @@ async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
 
+  // Las grabaciones solo se ven desde este mismo PC.
+  const privateRoute = parts[0] === 'grabaciones' || parts[0] === 'grabaciones.html' || (parts[0] === 'api' && parts[1] === 'sessions');
+  if (privateRoute && !isLocalRequest(req)) return forbidden(res, 'Las grabaciones solo se pueden ver desde el PC del estudio.');
+
   if (parts[0] !== 'api') {
     if (parts[0] === 'grabaciones') return serveFile(req, res, REC_DIR, parts.slice(1).join('/'), true);
     return serveFile(req, res, PUBLIC_DIR, parts.length ? parts.join('/') : 'index.html', false);
@@ -172,7 +181,9 @@ async function handle(req, res) {
 
   if (parts[1] === 'config') {
     const lanUrls = httpsReady ? lanAddresses().map((ip) => `https://${ip}:${HTTPS_PORT}`) : [];
-    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), lanUrls, publicUrl });
+    // La clave solo se entrega en el PC del estudio (para construir el enlace de invitación).
+    const accessKey = isLocalRequest(req) ? ACCESS_KEY : undefined;
+    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), lanUrls, publicUrl, accessKey });
   }
 
   // /api/rooms/:room/...
@@ -352,12 +363,16 @@ async function handle(req, res) {
 
 // ---------------------------------------------------------------- WebSocket de la sala
 // ws(s)://…/api/rooms/:room/ws?peer=&name=&device=  → eventos del servidor en JSON {event, data}
-function attachSignaling(server) {
+function attachSignaling(server, { requireKey = false } = {}) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://x');
     const m = /^\/api\/rooms\/([^/]+)\/ws$/.exec(url.pathname);
-    if (!m) { socket.destroy(); return; }
+    if (requireKey) req.viaPublic = true;
+    if (!m || (requireKey && !hasValidKey(req, url))) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => onPeerSocket(ws, decodeURIComponent(m[1]), url.searchParams, req));
   });
   const ping = setInterval(() => {
@@ -389,7 +404,7 @@ function onPeerSocket(ws, rawRoom, params, req) {
   room.peers.set(id, peer);
   // Quien abre la sala en este mismo PC recibe el enlace de invitación ya copiado en el portapapeles.
   const inviteCopied = room.peers.size === 1 && isLocalRequest(req) && publicUrl
-    ? copyToClipboard(`${publicUrl}/?sala=${encodeURIComponent(roomName)}`) : false;
+    ? copyToClipboard(inviteLink(roomName)) : false;
   send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session, inviteCopied });
   broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device }, id);
   ws.on('close', () => {
@@ -400,11 +415,65 @@ function onPeerSocket(ws, rawRoom, params, req) {
   });
 }
 
-/** Conexión hecha desde este mismo PC (no a través del túnel ni de la red local). */
+/** Conexión hecha desde este mismo PC (no a través de un túnel ni de la red local). */
 function isLocalRequest(req) {
-  if (!req || req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) return false;
+  if (!req || req.viaPublic || req.socket.localPort === PUBLIC_PORT) return false;
+  const h = req.headers;
+  if (h['cf-connecting-ip'] || h['x-forwarded-for'] || h['tailscale-funnel-request'] || h['x-forwarded-host']) return false;
   const ip = req.socket.remoteAddress || '';
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+// ---------------------------------------------------------------- clave de acceso
+/** Clave secreta que debe llevar el enlace público. Se genera una vez y se guarda en .env. */
+function ensureAccessKey() {
+  if (process.env.CLAVE_ACCESO) return process.env.CLAVE_ACCESO.trim();
+  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = require('crypto').randomBytes(12);
+  const key = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+  if (require.main === module) {
+    try {
+      const prev = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : '';
+      fs.writeFileSync(ENV_FILE, `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}\n# Clave secreta del enlace público (cámbiala para invalidar enlaces antiguos)\nCLAVE_ACCESO=${key}\n`);
+    } catch (err) { console.warn(`⚠  No se pudo guardar la clave en .env: ${err.message}`); }
+  }
+  process.env.CLAVE_ACCESO = key;
+  return key;
+}
+
+function cookieValue(req, name) {
+  const m = new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.headers.cookie || '');
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)); const y = Buffer.from(String(b));
+  return x.length === y.length && require('crypto').timingSafeEqual(x, y);
+}
+
+function hasValidKey(req, url) {
+  return safeEqual(url.searchParams.get('k') || '', ACCESS_KEY) || safeEqual(cookieValue(req, 'estudio_k'), ACCESS_KEY);
+}
+
+function forbidden(res, msg) {
+  res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Estudio</title><body style="font:16px system-ui;background:#111318;color:#eceef3;display:grid;place-items:center;min-height:90vh;text-align:center">
+<div><h1 style="font-size:20px">🔒 Acceso restringido</h1><p>${msg}</p></div></body>`);
+}
+
+/** Peticiones que llegan por el túnel público: exigen la clave y nunca dan acceso a las grabaciones. */
+function onPublicRequest(req, res) {
+  req.viaPublic = true;
+  const url = new URL(req.url, 'http://x');
+  if (!hasValidKey(req, url)) {
+    return forbidden(res, 'Este enlace no es válido o está incompleto. Pide el enlace de invitación completo a quien te invitó.');
+  }
+  if (url.searchParams.get('k')) {
+    // Se recuerda la clave para el resto de peticiones de la página (vídeo, subidas, sala).
+    res.setHeader('Set-Cookie', `estudio_k=${encodeURIComponent(ACCESS_KEY)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`);
+  }
+  return onRequest(req, res);
 }
 
 /** Copia texto al portapapeles del PC (Windows y Mac). Devuelve true si lo intentó. */
@@ -418,6 +487,10 @@ function copyToClipboard(text) {
     console.log(`   📋 Enlace de invitación copiado: ${text}`);
     return true;
   } catch { return false; }
+}
+
+function inviteLink(room) {
+  return `${publicUrl}/?sala=${encodeURIComponent(room)}&k=${encodeURIComponent(ACCESS_KEY)}`;
 }
 
 function onRequest(req, res) {
@@ -474,7 +547,7 @@ async function startTunnel() {
     console.log('   Descargando cloudflared (solo la primera vez)…');
     await cf.install(cf.bin);
   }
-  const t = cf.Tunnel.quick(`http://localhost:${HTTP_PORT}`);
+  const t = cf.Tunnel.quick(`http://localhost:${PUBLIC_PORT}`);
   const url = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Cloudflare no respondió en 60 s')), 60000);
     t.once('url', (u) => { clearTimeout(timer); resolve(u); });
@@ -483,8 +556,8 @@ async function startTunnel() {
   publicUrl = url;
   const line = '─'.repeat(url.length + 8);
   console.log(`\n   ┌${line}┐\n   │  🌍  ${url}  │\n   └${line}┘`);
-  console.log('   Enlace público (cambia cada vez que arrancas). Ábrelo en ambos dispositivos o comparte');
-  console.log('   el «enlace de invitación» que aparece dentro del estudio.\n');
+  console.log('   Enlace público (cambia cada vez que arrancas). En este PC usa http://localhost:' + HTTP_PORT + ';');
+  console.log('   el enlace de invitación (con su clave) se copia solo al entrar en el estudio.\n');
   if (!hasTurn()) {
     console.log('   Consejo: configura un servidor TURN en .env (ver .env.ejemplo) para que la llamada conecte');
     console.log('   aunque alguna de las redes bloquee las conexiones directas.\n');
@@ -493,6 +566,65 @@ async function startTunnel() {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   t.on('exit', (code) => { if (publicUrl === url) { publicUrl = ''; console.error(`⚠  El túnel se cerró (código ${code}). Reinicia con npm run internet.`); } });
+}
+
+// ---------------------------------------------------------------- Tailscale Funnel (dirección fija)
+function tailscaleExe() {
+  const { spawnSync } = require('child_process');
+  const candidates = ['tailscale'];
+  if (process.platform === 'win32') candidates.push(path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe'));
+  if (process.platform === 'darwin') candidates.push('/Applications/Tailscale.app/Contents/MacOS/Tailscale');
+  for (const c of candidates) {
+    const r = spawnSync(c, ['version'], { encoding: 'utf8' });
+    if (!r.error && r.status === 0) return c;
+  }
+  return null;
+}
+
+/** Publica el estudio en https://<pc>.<tailnet>.ts.net mientras esté abierto. */
+async function startTailscale() {
+  const { spawn, spawnSync } = require('child_process');
+  const exe = tailscaleExe();
+  if (!exe) throw new Error('Tailscale no está instalado (https://tailscale.com/download). Ver INSTALAR-WINDOWS.md');
+  const st = spawnSync(exe, ['status', '--json'], { encoding: 'utf8' });
+  let status = {};
+  try { status = JSON.parse(st.stdout); } catch { /* sin datos */ }
+  if (status.BackendState !== 'Running') throw new Error('Tailscale no está conectado: ábrelo e inicia sesión, y vuelve a probar');
+  const dns = String(status.Self?.DNSName || '').replace(/\.$/, '');
+  if (!dns) throw new Error('Tailscale no tiene nombre DNS: activa MagicDNS en https://login.tailscale.com/admin/dns');
+
+  // Se ejecuta en primer plano: el enlace solo funciona mientras el estudio está abierto.
+  const p = spawn(exe, ['funnel', String(PUBLIC_PORT)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const stop = () => { try { p.kill(); } catch { /* ya parado */ } };
+  process.once('exit', stop);
+  process.once('SIGINT', () => { stop(); process.exit(0); });
+  process.once('SIGTERM', () => { stop(); process.exit(0); });
+  await new Promise((resolve, reject) => {
+    let opened = false;
+    const timer = setTimeout(resolve, 8000);   // sin mensaje claro: se da por activo
+    const onData = (d) => {
+      const text = d.toString();
+      const login = /https:\/\/login\.tailscale\.com\/\S+/.exec(text);
+      if (login && !opened) {
+        opened = true;
+        clearTimeout(timer);
+        console.log('\n   Tailscale pide activar Funnel (solo la primera vez). Se abre en el navegador:');
+        console.log(`   ${login[0]}`);
+        console.log('   Pulsa «Enable» / «Activar» y vuelve aquí; el estudio sigue en cuanto esté activado.\n');
+        openBrowser(login[0]);
+      }
+      if (/available on the internet|Funnel on|Press Ctrl\+C/i.test(text)) { clearTimeout(timer); resolve(); }
+      if (/error|not allowed|denied/i.test(text) && !login) console.error(`   tailscale: ${text.trim()}`);
+    };
+    p.stdout.on('data', onData);
+    p.stderr.on('data', onData);
+    p.on('exit', (code) => { clearTimeout(timer); reject(new Error(`tailscale funnel terminó (código ${code})`)); });
+  });
+  p.removeAllListeners('exit');
+  p.on('exit', (code) => { publicUrl = ''; console.error(`⚠  Tailscale Funnel se detuvo (código ${code}). Cierra y vuelve a abrir el estudio.`); });
+  publicUrl = `https://${dns}`;
+  console.log(`\n   🌍  Dirección fija:  ${publicUrl}`);
+  console.log('   El enlace de invitación (con su clave) se copia solo al entrar en el estudio; es siempre el mismo.\n');
 }
 
 async function main() {
@@ -521,7 +653,20 @@ async function main() {
     if (httpsReady) for (const ip of ips) console.log(`   Misma wifi (iPad):   https://${ip}:${HTTPS_PORT}   (certificado autofirmado: «Mostrar detalles» → «visitar este sitio web»)`);
   }
   console.log(`   TURN: ${hasTurn() ? 'configurado ✓' : 'no configurado (opcional, ver .env.ejemplo)'}`);
-  if (process.argv.includes('--internet') || process.env.INTERNET === '1') {
+  const wantsTailscale = process.argv.includes('--tailscale') || String(process.env.PUBLICO || '').toLowerCase() === 'tailscale';
+  const wantsInternet = wantsTailscale || process.argv.includes('--internet') || process.env.INTERNET === '1';
+  const ownTunnel = !!process.env.PUBLIC_URL && !wantsInternet;   // túnel propio hacia PUBLIC_PORT
+  if (wantsInternet || ownTunnel) {
+    // Servidor solo para los túneles: escucha únicamente en este PC y exige la clave de acceso.
+    const publicServer = http.createServer(onPublicRequest);
+    attachSignaling(publicServer, { requireKey: true });
+    await new Promise((r, j) => { publicServer.once('error', j); publicServer.listen(PUBLIC_PORT, '127.0.0.1', r); })
+      .catch((err) => { console.error(`✗ El puerto ${PUBLIC_PORT} está ocupado (${err.code}). Usa PUBLIC_PORT=8091.`); process.exit(1); });
+  }
+  if (wantsTailscale) {
+    console.log('\n   Publicando con Tailscale Funnel…');
+    try { await startTailscale(); } catch (err) { console.error(`✗ ${err.message}`); }
+  } else if (wantsInternet) {
     console.log('\n   Abriendo enlace público por internet…');
     try { await startTunnel(); } catch (err) {
       console.error(`✗ No se pudo abrir el túnel: ${err.message}. Comprueba la conexión a internet (o un cortafuegos que bloquee cloudflared) y vuelve a probar.`);
@@ -546,4 +691,4 @@ function openBrowser(url) {
 
 if (require.main === module) main();
 
-module.exports = { onRequest, attachSignaling, iceServers, hasTurn };
+module.exports = { onRequest, onPublicRequest, attachSignaling, iceServers, hasTurn, ACCESS_KEY, PUBLIC_PORT };

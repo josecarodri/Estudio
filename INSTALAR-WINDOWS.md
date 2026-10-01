@@ -104,6 +104,38 @@ Si usas otro servidor TURN (coturn propio, Metered, Twilio…), en su lugar pon 
 `TURN_USER=…` y `TURN_PASS=…`.
 </details>
 
+## 8. (Opcional) Enlace fijo con Tailscale Funnel
+
+Con Cloudflare el enlace cambia cada vez. Con **Tailscale Funnel** es **siempre el mismo**
+(`https://<tu-pc>.<tu-red>.ts.net/?sala=…&k=…`), así que la otra persona puede guardarlo en la pantalla de inicio de
+su iPad y entrar con un toque. Tailscale es gratuito para uso personal y solo hay que instalarlo en **tu PC**.
+
+1. Descarga Tailscale de https://tailscale.com/download/windows, instálalo e **inicia sesión** (con Google, Microsoft,
+   GitHub…). Debe quedar el icono de Tailscale junto al reloj, conectado.
+2. En la carpeta `estudio`, doble clic en **`Elegir tipo de enlace (Windows).bat`** y pulsa **1** (fijo).
+3. Abre el estudio con el icono **Estudio**. **Solo la primera vez**, Tailscale abre una página en el navegador para
+   activar *Funnel* (y los certificados HTTPS): pulsa **Enable / Activar**. La ventana negra muestra entonces
+   **«Dirección fija: https://….ts.net»**. El primer acceso desde fuera puede tardar hasta un minuto mientras
+   Tailscale prepara el certificado.
+4. Entra en el estudio: el enlace de invitación se copia solo, como siempre. Envíaselo una vez; a partir de ahí
+   será siempre el mismo.
+
+**En el iPad (la otra persona):** abre el enlace en Safari → botón **Compartir** (cuadrado con flecha) →
+**Añadir a pantalla de inicio**. Aparece el icono **Estudio**; la próxima vez basta con tocarlo (con tu estudio abierto
+en el PC).
+
+Para volver al enlace de Cloudflare: `Elegir tipo de enlace (Windows).bat` → **2**.
+
+### Seguridad del enlace público (Cloudflare o Tailscale)
+
+- El enlace lleva una **clave secreta** (`&k=…`). Sin ella, el estudio muestra «Acceso restringido».
+  Compártelo solo con quien vaya a grabar contigo.
+- Las **grabaciones solo se pueden ver y descargar desde tu PC** (`http://localhost:8080`). Por el enlace público no
+  se puede acceder a ellas, aunque se tenga la clave.
+- El enlace solo funciona **mientras el estudio está abierto** en tu PC; al cerrar la ventana negra deja de responder.
+- Si alguna vez enviaste el enlace a quien no debías: abre `.env` con el Bloc de notas, borra la línea
+  `CLAVE_ACCESO=…` y vuelve a abrir el estudio. Se crea una clave nueva y los enlaces antiguos dejan de funcionar.
+
 ## Problemas frecuentes
 
 | Qué pasa | Qué hacer |
@@ -114,4 +146,6 @@ Si usas otro servidor TURN (coturn propio, Metered, Twilio…), en su lugar pon 
 | El navegador no pide cámara | Abre siempre el estudio en el PC como `http://localhost:8080` (lo hace el doble clic). |
 | La otra persona ve «sala llena» | Solo caben dos personas; cierra pestañas del estudio abiertas de más. |
 | «No se pudieron obtener credenciales TURN» | Vuelve a ejecutar `Configurar TURN (Windows).bat` y pega bien los dos valores (o crea una clave nueva en Cloudflare). |
+| La otra persona ve «Acceso restringido» | El enlace está incompleto: envíale de nuevo el enlace de invitación entero (termina en `&k=…`). |
+| «Tailscale no está conectado» | Abre Tailscale (icono junto al reloj) e inicia sesión; luego vuelve a abrir el estudio. |
 | La subida va lenta | Es normal con poca subida en el iPad: se guarda allí y termina al acabar. No cerréis Safari. |
