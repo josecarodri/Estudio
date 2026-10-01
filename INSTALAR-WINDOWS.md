@@ -31,15 +31,23 @@ Doble clic en **`Instalar (Windows).bat`**.
 - Si Windows muestra **«Windows protegió su PC»**: pulsa **Más información → Ejecutar de todas formas**.
 - Si dice que no encuentra Node.js, vuelve al paso 1 (y reinicia el PC).
 
+## 3b. Crear el icono «Estudio» en el escritorio (una sola vez)
+
+Doble clic en **`Crear acceso directo (Windows).bat`**. Aparece un icono **Estudio** (un punto rojo) en el escritorio y
+en el menú Inicio. Desde entonces, para grabar basta con abrir ese icono.
+
+Si mueves la carpeta del programa a otro sitio, vuelve a ejecutar este archivo.
+
 ## 4. Grabar con alguien en otra ciudad
 
-1. Doble clic en **`Estudio por internet (Windows).bat`**.
+1. Doble clic en el icono **Estudio** del escritorio (o en **`Estudio por internet (Windows).bat`**).
 2. La primera vez, Windows pregunta si permites a **Node.js** acceder a la red: marca **Redes privadas** y pulsa
    **Permitir**.
 3. Se abre el navegador con el estudio. En la ventana negra aparece un recuadro con el enlace público
    (`https://….trycloudflare.com`).
-4. En el navegador escribe tu nombre y pulsa **Entrar**. Pulsa **Copiar enlace** y envíaselo a la otra persona
-   (WhatsApp, correo…). Ella lo abre en **Safari** en el iPad, pone su nombre y pulsa **Entrar**.
+4. En el navegador pulsa **Entrar** (tu nombre y la sala se recuerdan). El **enlace de invitación se copia solo** al
+   portapapeles: pégalo (Ctrl+V) en WhatsApp o en un correo para la otra persona. Ella lo abre en **Safari** en el
+   iPad, pone su nombre y pulsa **Entrar**.
 5. Pulsa **● Grabar**. Al terminar, **■ Detener** y esperad a que los dos pongan **✓ Guardado en el servidor**.
 
 > **No cierres la ventana negra** mientras grabáis ni hasta que termine la subida: es el estudio. Para apagarlo,

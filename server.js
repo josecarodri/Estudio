@@ -358,7 +358,7 @@ function attachSignaling(server) {
     const url = new URL(req.url, 'http://x');
     const m = /^\/api\/rooms\/([^/]+)\/ws$/.exec(url.pathname);
     if (!m) { socket.destroy(); return; }
-    wss.handleUpgrade(req, socket, head, (ws) => onPeerSocket(ws, decodeURIComponent(m[1]), url.searchParams));
+    wss.handleUpgrade(req, socket, head, (ws) => onPeerSocket(ws, decodeURIComponent(m[1]), url.searchParams, req));
   });
   const ping = setInterval(() => {
     for (const ws of wss.clients) {
@@ -371,7 +371,7 @@ function attachSignaling(server) {
   return wss;
 }
 
-function onPeerSocket(ws, rawRoom, params) {
+function onPeerSocket(ws, rawRoom, params, req) {
   const roomName = slug(rawRoom, 'sala');
   const room = getRoom(roomName);
   const id = slug(params.get('peer'), '');
@@ -387,7 +387,10 @@ function onPeerSocket(ws, rawRoom, params) {
   if (existing) existing.ws.close(4001, 'Reemplazado');
   const peer = { id, name: String(params.get('name') || 'Invitado').slice(0, 40), device: String(params.get('device') || '').slice(0, 40), ws };
   room.peers.set(id, peer);
-  send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session });
+  // Quien abre la sala en este mismo PC recibe el enlace de invitación ya copiado en el portapapeles.
+  const inviteCopied = room.peers.size === 1 && isLocalRequest(req) && publicUrl
+    ? copyToClipboard(`${publicUrl}/?sala=${encodeURIComponent(roomName)}`) : false;
+  send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session, inviteCopied });
   broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device }, id);
   ws.on('close', () => {
     if (room.peers.get(id) !== peer) return;
@@ -395,6 +398,26 @@ function onPeerSocket(ws, rawRoom, params) {
     broadcast(room, 'peer-left', { id });
     if (!room.peers.size && !room.session?.recording) rooms.delete(roomName);
   });
+}
+
+/** Conexión hecha desde este mismo PC (no a través del túnel ni de la red local). */
+function isLocalRequest(req) {
+  if (!req || req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) return false;
+  const ip = req.socket.remoteAddress || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+/** Copia texto al portapapeles del PC (Windows y Mac). Devuelve true si lo intentó. */
+function copyToClipboard(text) {
+  const cmd = process.platform === 'win32' ? 'clip' : process.platform === 'darwin' ? 'pbcopy' : null;
+  if (!cmd) return false;
+  try {
+    const p = require('child_process').spawn(cmd, [], { stdio: ['pipe', 'ignore', 'ignore'] });
+    p.on('error', () => {});
+    p.stdin.end(text);
+    console.log(`   📋 Enlace de invitación copiado: ${text}`);
+    return true;
+  } catch { return false; }
 }
 
 function onRequest(req, res) {

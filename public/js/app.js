@@ -318,6 +318,7 @@
 
   function onWelcome(d) {
     setConn('Conectado a la sala');
+    if (d.inviteCopied) toast('Enlace de invitación copiado: pégalo en WhatsApp o en un correo para la otra persona.');
     if (d.peers.length) {
       // Soy el último en llegar: inicio la llamada.
       startCall(d.peers[0], true);
