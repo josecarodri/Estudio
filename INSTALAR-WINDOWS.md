@@ -15,8 +15,7 @@ en Safari.
 ## 2. Descargar Estudio
 
 1. Entra en https://github.com/josecarodri/Personal con tu cuenta de GitHub.
-2. Arriba a la izquierda, en el botón de la rama (pone `main`), elige **`claude/lucid-gauss-i65810`**
-   (cuando esté fusionado en `main` no hará falta este paso).
+2. Comprueba que arriba a la izquierda, en el botón de la rama, pone **`main`** (si no, elígela ahí).
 3. Pulsa el botón verde **Code → Download ZIP**.
 4. Antes de descomprimir: clic derecho sobre el ZIP → **Propiedades** → marca **Desbloquear** (abajo) → **Aceptar**.
    Así Windows no bloqueará los archivos de doble clic.
