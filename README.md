@@ -137,7 +137,7 @@ tiene cortafuegos, permite a Node.js conexiones en red privada.
    **segundo pitido**, 1 s antes del final. En pantalla verás un destello en cada uno.
 3. **Alineado automático** (`npm run alinear`): busca los pitidos en cada archivo y genera en `alineados/` versiones que
    empiezan en el mismo instante, con la misma duración, vídeo H.264 a **30 fps constantes** y audio a 48 kHz, con los
-   pitidos silenciados. Con el pitido final **corrige la deriva**: los relojes de dos dispositivos distintos nunca van
+   pitidos silenciados, y con dos personas una vista **`lado_a_lado.mp4`** (las dos cámaras juntas, para usar como tercer ángulo en un multicámara). Con el pitido final **corrige la deriva**: los relojes de dos dispositivos distintos nunca van
    exactamente a la misma velocidad y en una hora pueden separarse decenas de milisegundos; el alineado estira o encoge
    cada pista para compensarlo.
 

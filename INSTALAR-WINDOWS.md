@@ -65,6 +65,9 @@ También puedes verlas y descargarlas desde el enlace **Grabaciones** (arriba a 
    Cierra PowerShell cuando termine.
 2. Doble clic en **`Alinear grabaciones (Windows).bat`**. Crea en cada grabación una carpeta **`alineados`** con los
    archivos ya sincronizados (MP4 a 30 fps y WAV), listos para Premiere, DaVinci Resolve, etc.
+   Si grabasteis dos personas, también crea **`lado_a_lado.mp4`**: las dos cámaras juntas, una al lado de la otra
+   (sin audio; el sonido va en los WAV). Úsalo como tercera cámara en el editor para los momentos de conversación
+   rápida.
 
 ## 7. (Recomendado) Servidor TURN para que la llamada conecte siempre
 

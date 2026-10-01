@@ -6,7 +6,10 @@
  *
  *   npm run alinear                                  → todas las sesiones de grabaciones/
  *   npm run alinear -- grabaciones/sala/2026-...     → una sesión
- *   opciones: --fps 30 | --mantener-pitido | --crf 18
+ *   opciones: --fps 30 | --mantener-pitido | --crf 18 | --sin-lado-a-lado
+ *
+ * Con dos personas genera además lado_a_lado.mp4 (las dos cámaras juntas) para usarlo como tercera
+ * «cámara» en un clip multicámara del editor.
  *
  * Requiere ffmpeg y ffprobe en el PATH.
  */
@@ -20,6 +23,7 @@ const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[
 const FPS = Number(opt('--fps', 30));
 const CRF = Number(opt('--crf', 18));
 const KEEP_BEEP = args.includes('--mantener-pitido');
+const NO_SIDE_BY_SIDE = args.includes('--sin-lado-a-lado');
 const DETECT_RATE = 16000;
 const SEARCH_SEC = 20;
 const MAX_DRIFT_PPM = 20000;  // más de un 2 % no es deriva de reloj sino un pitido mal detectado
@@ -64,6 +68,20 @@ function duration(file) {
   const dec = run('ffmpeg', ['-v', 'info', '-i', file, '-map', '0:a:0?', '-map', '0:v:0?', '-f', 'null', '-']);
   const m = [...dec.stderr.toString().matchAll(/time=(\d+):(\d+):([\d.]+)/g)].pop();
   return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : null;
+}
+
+/**
+ * Vista «lado a lado» 1920×1080: cada cámara recortada al centro para llenar su mitad, con una línea fina entre ambas.
+ * Sin audio (en el editor se usan los WAV). Funciona también si alguien grabó en vertical.
+ */
+function sideBySide(left, right, out) {
+  const half = 'scale=960:1080:force_original_aspect_ratio=increase,crop=960:1080,setsar=1';
+  const r = run('ffmpeg', ['-y', '-v', 'error', '-stats', '-i', left, '-i', right,
+    '-filter_complex', `[0:v]${half}[l];[1:v]${half}[r];[l][r]hstack=inputs=2:shortest=1,drawbox=x=957:y=0:w=6:h=1080:color=0x111318:t=fill,fps=${FPS},format=yuv420p[v]`,
+    '-map', '[v]', '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF), '-movflags', '+faststart', out],
+  { stdio: ['ignore', 'inherit', 'inherit'] });
+  if (r.status !== 0) { console.log('    ✗ ffmpeg falló al crear la vista lado a lado'); return false; }
+  return true;
 }
 
 function alignSession(dir) {
@@ -128,6 +146,7 @@ function alignSession(dir) {
     '',
   ];
 
+  const cams = [];
   for (const it of items) {
     const R = it.ratio;
     const trim = it.beep - lead / R;          // segundo del archivo original que pasa a ser el 0
@@ -161,6 +180,16 @@ function alignSession(dir) {
     if (r.status !== 0) { console.log(`    ✗ ffmpeg falló con ${it.t.file}`); continue; }
     const driftTxt = R !== 1 ? `, deriva corregida ${((R - 1) * 1e6).toFixed(0)} ppm` : '';
     report.push(`${path.basename(out)}  ←  ${it.t.file}  (${it.person}, recortado ${trim.toFixed(3)} s al inicio${driftTxt})`);
+    if (it.t.kind === 'camara') cams.push({ out, participant: it.t.participant, person: it.person });
+  }
+  if (cams.length === 2 && !NO_SIDE_BY_SIDE) {
+    const order = Object.keys(s.participants || {});
+    cams.sort((x, y) => order.indexOf(x.participant) - order.indexOf(y.participant));
+    const out = path.join(outDir, 'lado_a_lado.mp4');
+    console.log(`    → ${path.relative(process.cwd(), out)}  (${cams[0].person} | ${cams[1].person})`);
+    if (sideBySide(cams[0].out, cams[1].out, out)) {
+      report.push(`lado_a_lado.mp4  ←  ${cams[0].person} (izquierda) y ${cams[1].person} (derecha), sin audio: usa los WAV`);
+    }
   }
   fs.writeFileSync(path.join(outDir, 'LEEME.txt'), report.join('\n') + '\n');
   console.log(`  ✓ Listo: ${path.relative(process.cwd(), outDir)}`);
