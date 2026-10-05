@@ -165,6 +165,15 @@ en la forma de onda de cada pista (o usa «sincronizar por audio»).
   (vídeo y audio, que van por otro camino) sigue como estaba, sin imagen congelada. Solo se rehace si la llamada
   murió de verdad o si la persona vuelve con una página nueva (p. ej. tras recargar). Un cierre a propósito de la
   pestaña apenas espera.
+- **Si la página se cierra o falla en plena grabación** (p. ej. un fallo del navegador), la otra persona **sigue
+  grabando** sin tocar nada. Al volver a abrir el estudio (en los siguientes 15 min) aparece un aviso grande:
+  **«La página se cerró mientras se grababa — Volver a entrar y seguir grabando»**. Con un clic entra en la sala y
+  **empieza a grabar al instante**, como un **tramo nuevo de la misma grabación**: sin cuenta atrás, sin pitido ni
+  destello (sonarían en mitad de la conversación) y con archivos propios (`jc-2_camara.mp4`, `jc-2_audio.wav`…).
+  En `session.json` esa persona figura con `retomada: true` y `retomaDe: "jc"`. Hace falta el clic porque los
+  navegadores no dejan arrancar el audio sin un gesto del usuario. La parte que se grabó antes de la caída se conserva
+  (hasta el último trozo subido). Para sincronizar el tramo nuevo no hay pitido de inicio: se alinea con la grabación
+  de la llamada y con la hora de inicio de cada pista.
 - Si se cierra la pestaña a mitad de la subida, al volver a abrir el estudio aparece **«Grabaciones sin terminar de
   subir»** con opciones para subirlas, descargarlas o borrarlas.
 - Tras grabar, cada pista tiene un botón **Descargar copia** que la reconstruye desde el dispositivo.

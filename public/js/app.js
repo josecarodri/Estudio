@@ -32,7 +32,21 @@
     uploaders: [],
     remoteStatus: null,
     wakeLock: null,
+    recuperando: false,   // se entró para retomar una grabación tras una caída de la página
   };
+
+  // Marca en el navegador mientras se graba: si la página muere, al reabrir sigue ahí y permite retomar.
+  const CLAVE_RECUPERAR = 'estudio.recuperar';
+  const VIGENCIA_RECUPERAR_MS = 15 * 60 * 1000;
+  function marcarRecuperacion(datos) {
+    try {
+      if (datos) localStorage.setItem(CLAVE_RECUPERAR, JSON.stringify({ ...datos, ts: Date.now() }));
+      else localStorage.removeItem(CLAVE_RECUPERAR);
+    } catch { /* sin almacenamiento: no hay recuperación */ }
+  }
+  function leerRecuperacion() {
+    try { return Llamada.recuperacionVigente(JSON.parse(localStorage.getItem(CLAVE_RECUPERAR) || 'null'), Date.now(), VIGENCIA_RECUPERAR_MS); } catch { return null; }
+  }
 
   function randomId() {
     const a = new Uint8Array(6);
@@ -81,8 +95,34 @@
     $('#headphones').addEventListener('change', () => state.localStream && startPreview().catch(showMediaError));
     $('#setupForm').addEventListener('submit', (e) => { e.preventDefault(); join().catch((err) => { console.error(err); toast(err.message, 'error'); }); });
     checkStoredUploads();
+    ofrecerRecuperacion();
     // Las grabaciones solo se ven en el PC del estudio: el enlace solo aparece allí.
     fetch('/api/config').then((r) => r.json()).then((c) => { $('#linkGrabaciones').hidden = !c.accessKey; }).catch(() => {});
+  }
+
+  /**
+   * Si la página se cerró (o falló) en plena grabación y se vuelve a abrir enseguida, ofrece retomarla con un clic.
+   * Hace falta el clic porque los navegadores no dejan arrancar el audio sin un gesto del usuario.
+   */
+  function ofrecerRecuperacion() {
+    const marca = leerRecuperacion();
+    if (!marca) return;
+    Registro.anotar('recuperacion-ofrecida', { sala: marca.sala, hace_s: marca.segundos });
+    $('#room').value = marca.sala;
+    $('#name').value = marca.nombre;
+    $('#recuperarTexto').textContent = `En «${marca.sala}» se estaba grabando hace ${marca.segundos} s. Si la otra persona sigue grabando, puedes continuar: se guarda como un tramo nuevo de la misma grabación.`;
+    $('#recuperar').hidden = false;
+    $('#btnRecuperar').addEventListener('click', () => {
+      state.recuperando = true;
+      $('#recuperar').hidden = true;
+      Registro.anotar('recuperacion-aceptada', { sala: marca.sala });
+      join().catch((err) => { state.recuperando = false; console.error(err); toast(err.message, 'error'); $('#recuperar').hidden = false; });
+    });
+    $('#btnDescartar').addEventListener('click', () => {
+      marcarRecuperacion(null);
+      $('#recuperar').hidden = true;
+      Registro.anotar('recuperacion-descartada', { sala: marca.sala });
+    });
   }
 
   function showMediaError(err) {
@@ -360,7 +400,19 @@
       closeCall();
       setRemote(null);
     }
-    if (d.session?.recording && !state.rec) toast('Hay una grabación en curso; empezará con la próxima.', 'warn');
+    const accion = Llamada.alRecibirGrabacion({ recuperando: state.recuperando, grabandoYa: !!state.rec, sesionEnCurso: !!d.session?.recording });
+    if (accion !== 'nada') Registro.anotar('grabacion-en-curso', { accion, sesion: d.session?.id });
+    if (accion === 'retomar') {
+      state.recuperando = false;       // una sola vez: las bienvenidas siguientes (reconexión) no arrancan otra grabación
+      toast('Retomando la grabación…');
+      startRecording(d.session, { tarde: true }).catch((err) => { console.error(err); toast(`No se pudo retomar la grabación: ${err.message}`, 'error'); });
+    } else if (accion === 'terminada') {
+      state.recuperando = false;
+      marcarRecuperacion(null);
+      toast('La grabación ya había terminado. Los archivos que no se llegaron a subir aparecen en «Grabaciones sin terminar de subir».', 'warn');
+    } else if (accion === 'avisar') {
+      toast('Hay una grabación en curso; empezará con la próxima.', 'warn');
+    }
   }
 
   function setConn(text) { $('#connInfo').textContent = text; }
@@ -570,22 +622,34 @@
     if (!r.ok) throw new Error(j.error || 'Error');
   }
 
-  async function startRecording(session) {
+  /**
+   * Empieza a grabar. Con `tarde` (retomar una grabación tras la caída de la página) se graba ya mismo, sin cuenta atrás,
+   * sin pitido ni destello (sonarían en mitad de la conversación) y como un tramo nuevo de la misma sesión.
+   * La sincronía con el resto sigue saliendo de la hora de inicio de cada pista y de la grabación de la llamada.
+   */
+  async function startRecording(sessionServidor, { tarde = false } = {}) {
     if (state.rec) return;
     // Se libera el espacio de grabaciones anteriores ya subidas.
     for (const u of state.uploaders.filter((x) => x.finished)) await u.deleteLocal().catch(() => {});
     state.uploaders = state.uploaders.filter((u) => !u.finished);
 
-    const startLocal = session.startAt - state.clock.offset;
-    const beepLocal = session.beepAt - state.clock.offset;
+    const startLocal = tarde ? localNow() + 500 : sessionServidor.startAt - state.clock.offset;
+    const beepLocal = tarde ? null : sessionServidor.beepAt - state.clock.offset;
+    // Para este dispositivo la «hora de inicio programada» es la real; sin claqueta no hay pitido que medir.
+    const session = tarde ? { ...sessionServidor, startAt: startLocal + state.clock.offset, beepAt: null } : sessionServidor;
     const res = RESOLUTIONS[$('#resolution').value] || RESOLUTIONS['1080'];
     const vs = state.localStream.getVideoTracks()[0].getSettings();
     const base = {
       room: state.room, session: session.id, participant: state.me.id, name: state.me.name, device: state.me.device,
+      ...(tarde ? { retomada: true } : {}),
     };
-    const rec = { session, startLocal, recorders: [], worklet: null, canvasTimer: null, stopping: false };
+    const rec = { session, startLocal, recorders: [], worklet: null, canvasTimer: null, stopping: false, tarde };
     state.rec = rec;
-    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate });
+    // Marca de recuperación: si esta página muere grabando, la siguiente podrá ofrecer retomar.
+    const marca = () => marcarRecuperacion({ grabando: true, sala: state.room, nombre: state.me.name, sesion: session.id });
+    marca();
+    rec.marcaTimer = setInterval(marca, 5000);
+    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate, retomada: tarde });
     requestWakeLock();
     setRecordingUi('armed');
 
@@ -627,18 +691,18 @@
     for (const r of rec.recorders) await r.uploader.start();
 
     // Claqueta digital: pitido de 1 kHz en todas las grabaciones a la misma hora del servidor.
-    scheduleBeep(ctxTimeFor(beepLocal));
+    if (!tarde) scheduleBeep(ctxTimeFor(beepLocal));
 
     // Cuenta atrás y arranque sincronizado.
     const wait = startLocal - localNow();
-    if (wait < 0) toast('La orden de grabar llegó tarde; se sincronizará con el pitido.', 'warn');
-    countdown(startLocal);
+    if (wait < 0 && !tarde) toast('La orden de grabar llegó tarde; se sincronizará con el pitido.', 'warn');
+    if (!tarde) countdown(startLocal);
     setTimeout(() => {
       for (const r of rec.recorders) { r.startedAtServer = serverNow(); r.recorder.start(1000); }
       setRecordingUi('recording');
       timerLoop();
     }, Math.max(0, wait));
-    setTimeout(flash, Math.max(0, beepLocal - localNow()));
+    if (!tarde) setTimeout(flash, Math.max(0, beepLocal - localNow()));
   }
 
   function makeRecorder(stream, info, opts) {
@@ -715,6 +779,9 @@
     const rec = state.rec;
     if (!rec || rec.stopping) return;
     rec.stopping = true;
+    // Una parada normal no debe dejar marca de «se cerró grabando».
+    clearInterval(rec.marcaTimer);
+    marcarRecuperacion(null);
     Registro.anotar('grabacion-fin', { sesion: session.id });
     const stopLocal = (session.stopAt || serverNow()) - state.clock.offset;
     // Pitido final: con el inicial permite medir y corregir la deriva entre los relojes de los dispositivos.

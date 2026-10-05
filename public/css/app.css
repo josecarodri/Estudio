@@ -107,3 +107,10 @@ code { background: var(--bg); padding: 2px 6px; border-radius: 6px; font-size: 1
   .setup { grid-template-columns: 1fr; }
   .tiles { grid-template-columns: 1fr; }
 }
+
+/* Aviso de recuperación: la página se cerró en plena grabación y se puede retomar con un clic. */
+.recuperar { grid-column: 1 / -1; border-color: var(--rec); background: rgba(255, 77, 77, .08); }
+.recuperar h2 { margin: 0 0 6px; font-size: 18px; }
+.recuperar p { margin: 0 0 12px; }
+.recuperar-acciones { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.recuperar-acciones .primary { padding: 14px 20px; font-size: 16px; }

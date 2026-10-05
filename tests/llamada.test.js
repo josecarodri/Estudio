@@ -50,3 +50,24 @@ test('si las dos llamadas están muertas, ofrece solo una persona (la de identif
   const b = L.alPedirReinicio({ yoTambienRehago: true, miId: 'bbb', otroId: 'aaa' });
   assert.deepStrictEqual([a, b].sort(), ['esperar', 'ofrecer']);
 });
+
+test('recuperación: la marca solo vale si es de una grabación en curso, completa y reciente', () => {
+  const ahora = 1_000_000;
+  const ok = { grabando: true, sala: 'dtp', nombre: 'JC', ts: ahora - 20_000 };
+  assert.deepStrictEqual(L.recuperacionVigente(ok, ahora, 900_000), { ...ok, segundos: 20 });
+  assert.strictEqual(L.recuperacionVigente(null, ahora, 900_000), null);
+  assert.strictEqual(L.recuperacionVigente({ ...ok, grabando: false }, ahora, 900_000), null, 'paró a propósito');
+  assert.strictEqual(L.recuperacionVigente({ ...ok, ts: ahora - 901_000 }, ahora, 900_000), null, 'demasiado antigua');
+  assert.strictEqual(L.recuperacionVigente({ ...ok, ts: ahora + 5000 }, ahora, 900_000), null, 'hora imposible');
+  assert.strictEqual(L.recuperacionVigente({ ...ok, sala: '' }, ahora, 900_000), null, 'marca incompleta');
+});
+
+test('al entrar con una grabación en curso: solo se retoma si venimos de una caída', () => {
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabandoYa: false, sesionEnCurso: true }), 'retomar');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabandoYa: false, sesionEnCurso: true }), 'avisar',
+    'quien entra normal no empieza a grabar sin que se lo pidan');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabandoYa: false, sesionEnCurso: false }), 'terminada');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabandoYa: false, sesionEnCurso: false }), 'nada');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabandoYa: true, sesionEnCurso: true }), 'nada',
+    'una segunda bienvenida (reconexión de la sala) no debe arrancar una segunda grabación');
+});

@@ -233,3 +233,42 @@ test('formato del registro: líneas legibles y sin saltos', () => {
   assert.strictEqual(valor('línea\nsiguiente'), '"línea siguiente"');
   assert.strictEqual(valor('x'.repeat(500)).length, 200);
 });
+
+test('retomar una grabación: la página nueva de la misma persona guarda un tramo nuevo, sin pisar el anterior', async () => {
+  const server = await listen();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { a, b } = await sala(base, 'retoma');
+    const start = await post(base, '/api/rooms/retoma/record', { action: 'start', from: 'aaa' });
+    const sesion = start.json.id;
+
+    // La página de Beto graba y luego muere sin cerrar sus pistas.
+    const reg = (participant, extra = {}) => post(base, '/api/tracks', { room: 'retoma', session: sesion, participant, name: 'Beto', kind: 'audio', format: 'wav', mime: 'audio/wav', sampleRate: 48000, channels: 1, ...extra });
+    assert.strictEqual((await reg('bbb')).json.file, 'beto_audio.wav');
+    b.caida();
+    await a.next('peer-away');
+
+    // Vuelve con otra página (otro identificador) y retoma la grabación que sigue en curso.
+    const b2 = cliente(base, '/api/rooms/retoma/ws?peer=ccc&name=Beto&device=iPad');
+    const w = await b2.next('welcome');
+    assert.strictEqual(w.session.recording, true, 'la bienvenida informa de que la grabación sigue en curso');
+    assert.strictEqual(w.session.id, sesion);
+    const nueva = await reg('ccc', { retomada: true });
+    assert.strictEqual(nueva.status, 200);
+    assert.strictEqual(nueva.json.file, 'beto-2_audio.wav', 'archivo propio: no pisa beto_audio.wav');
+
+    const s = JSON.parse(fs.readFileSync(path.join(process.env.GRABACIONES_DIR, 'retoma', sesion, 'session.json'), 'utf8'));
+    assert.strictEqual(s.participants.ccc.retomada, true);
+    assert.strictEqual(s.participants.ccc.retomaDe, 'beto', 'se anota de quién continúa');
+    assert.ok(!s.participants.bbb.retomada);
+    const texto = fs.readFileSync(path.join(process.env.LOGS_DIR, fs.readdirSync(process.env.LOGS_DIR)[0]), 'utf8');
+    assert.match(texto, /servidor grabacion-retomada sala=retoma sesion=\S+ nombre=Beto retoma_de=beto/);
+
+    // La parada la sigue recibiendo también la página que retomó.
+    await post(base, '/api/rooms/retoma/record', { action: 'stop', from: 'aaa' });
+    await b2.next('record-stop');
+    a.close(); b2.close();
+  } finally {
+    server.closeAllConnections(); server.close();
+  }
+});

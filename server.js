@@ -290,6 +290,14 @@ async function handle(req, res) {
     const pid = slug(m.participant, 'p');
     // Etiqueta única por persona para los nombres de archivo.
     const part = s.participants[pid] || (s.participants[pid] = { name: m.name || 'Invitado', device: m.device || '' });
+    // Una página que se cerró en plena grabación y vuelve a entrar para seguir: sus archivos son un tramo nuevo de la
+    // misma sesión. Se anota de quién continúa para poder juntarlos después.
+    if (m.retomada && !part.retomada) {
+      part.retomada = true;
+      const previa = Object.entries(s.participants).find(([otro, p]) => otro !== pid && p.name === part.name && p.label);
+      if (previa) part.retomaDe = previa[1].label;
+      slog('grabacion-retomada', { sala: s.room, sesion: s.id, nombre: part.name, retoma_de: part.retomaDe });
+    }
     if (!part.label) {
       const base = slug(part.name, 'persona');
       const used = new Set(Object.values(s.participants).map((p) => p.label).filter(Boolean));

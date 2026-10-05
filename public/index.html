@@ -18,6 +18,15 @@
 
   <!-- Preparación -->
   <main id="setup" class="setup">
+    <section id="recuperar" class="card recuperar" hidden>
+      <h2>La página se cerró mientras se grababa</h2>
+      <p id="recuperarTexto"></p>
+      <div class="recuperar-acciones">
+        <button id="btnRecuperar" type="button" class="primary">Volver a entrar y seguir grabando</button>
+        <button id="btnDescartar" type="button" class="link">No, descartar</button>
+      </div>
+    </section>
+
     <section class="card preview-card">
       <div class="video-wrap"><video id="preview" autoplay playsinline muted></video></div>
       <div class="preview-bar">

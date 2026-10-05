@@ -57,7 +57,35 @@
     return ofreceYo(miId, otroId) ? 'ofrecer' : 'esperar';
   }
 
-  const api = { viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio };
+  /**
+   * Recuperación tras la caída de la página en plena grabación. La página deja una marca (en el navegador)
+   * mientras graba y la borra al parar a propósito: si al abrir sigue ahí y es reciente, es que se cerró grabando.
+   * Devuelve la marca si es válida (con los segundos transcurridos) o null.
+   */
+  function recuperacionVigente(marca, ahora, vigenciaMs) {
+    if (!marca || !marca.grabando || !marca.sala || !marca.nombre || !(marca.ts > 0)) return null;
+    const pasado = ahora - marca.ts;
+    if (pasado < 0 || pasado > vigenciaMs) return null;
+    return { ...marca, segundos: Math.round(pasado / 1000) };
+  }
+
+  /**
+   * La sala da la bienvenida (welcome) a quien acaba de entrar. ¿Qué hace con una grabación en curso?
+   * - 'retomar': venimos de una caída (el usuario pidió retomar) y la grabación sigue: se graba ya, como tramo nuevo.
+   * - 'terminada': venimos de una caída pero la grabación ya acabó mientras tanto: no hay nada que retomar.
+   * - 'avisar': entra alguien normal con una grabación en marcha: empezará con la próxima.
+   * - 'nada': no hay grabación en curso.
+   */
+  function alRecibirGrabacion({ recuperando, grabandoYa, sesionEnCurso }) {
+    if (grabandoYa) return 'nada';
+    if (sesionEnCurso) return recuperando ? 'retomar' : 'avisar';
+    return recuperando ? 'terminada' : 'nada';
+  }
+
+  const api = {
+    viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio,
+    recuperacionVigente, alRecibirGrabacion,
+  };
   root.Llamada = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
