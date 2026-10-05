@@ -112,6 +112,7 @@
       },
     };
     state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    vigilarPistas(state.localStream);
     $('#preview').srcObject = state.localStream;
     $('#localVideo').srcObject = state.localStream;
     await fillDevices();
@@ -264,6 +265,8 @@
     $('#localName').textContent = `${name} (tú)`;
     $('#inviteLink').value = inviteUrl();
     updateClock(state.clock);
+    Registro.iniciar({ room, peer: state.me.id, nombre: name, latido: latidoDatos });
+    Registro.anotar('sala', { sala: room, nombre: name, dispositivo: state.me.device, resolucion: $('#resolution').value });
     connectEvents();
     window.addEventListener('beforeunload', (e) => {
       if (state.rec || state.uploaders.some((u) => !u.finished)) { e.preventDefault(); e.returnValue = ''; }
@@ -296,9 +299,29 @@
     let opened = false;
     const handlers = {
       welcome: onWelcome,
-      'peer-joined': (p) => { toast(`${p.name} ha entrado`); startCall(p, false); },
+      'peer-joined': (p) => {
+        const mismoRemoto = state.remote?.id === p.id;
+        const accion = Llamada.alEntrarOtro({ volvio: p.volvio, mismoRemoto, estadoPc: state.pc?.connectionState });
+        Registro.anotar('persona-entra', { nombre: p.name, volvio: !!p.volvio, accion, pc: state.pc?.connectionState });
+        if (accion === 'mantener') {
+          // Solo se había caído el canal de la sala: la llamada (vídeo y audio) sigue, no se toca.
+          toast(`${p.name} ha vuelto`);
+          $('#remoteState').textContent = state.pc?.connectionState === 'connected' ? '' : 'reconectando…';
+          return;
+        }
+        toast(`${p.name} ha entrado`);
+        startCall(p, false);
+        // Misma página pero con su llamada muerta: se pide a la otra parte que ofrezca una nueva.
+        if (p.volvio && mismoRemoto) { state.rehaciendo = true; sendSignal(p.id, { reiniciar: true }); }
+      },
+      'peer-away': ({ id, graciaMs }) => {
+        if (state.remote?.id !== id) return;
+        Registro.anotar('persona-ausente', { nombre: state.remote.name, gracia_s: graciaMs / 1000, pc: state.pc?.connectionState });
+        toast(`${state.remote.name} ha perdido la conexión con la sala. Se espera a que vuelva…`, 'warn');
+      },
       'peer-left': ({ id }) => {
         if (state.remote?.id !== id) return;
+        Registro.anotar('persona-sale', { nombre: state.remote.name });
         toast(`${state.remote.name} ha salido`, 'warn');
         closeCall();
         setRemote(null);
@@ -309,13 +332,14 @@
       'record-stop': stopRecording,
       'room-full': (d) => { state.roomFull = true; setConn('Sala llena'); toast(d.error, 'error'); },
     };
-    ws.onopen = () => { opened = true; setConn('Conectado a la sala'); };
+    ws.onopen = () => { opened = true; setConn('Conectado a la sala'); Registro.anotar('ws-abierto', { intento: attempt }); };
     ws.onmessage = (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
       handlers[msg.event]?.(msg.data);
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
+      Registro.anotar('ws-cerrado', { codigo: e.code, motivo: e.reason, estuvo_abierto: opened });
       if (state.events !== ws || state.roomFull) return;
       setConn('Reconectando…');
       const next = opened ? 0 : attempt + 1;
@@ -327,8 +351,11 @@
     setConn('Conectado a la sala');
     if (d.inviteCopied) toast('Enlace de invitación copiado: pégalo en WhatsApp o en un correo para la otra persona.');
     if (d.peers.length) {
-      // Soy el último en llegar: inicio la llamada.
-      startCall(d.peers[0], true);
+      const otro = d.peers[0];
+      const accion = Llamada.alVolver({ volvio: d.volvio, mismoRemoto: state.remote?.id === otro.id, estadoPc: state.pc?.connectionState });
+      Registro.anotar('bienvenida', { otro: otro.name, otro_ausente: !!otro.ausente, volvio: !!d.volvio, accion, pc: state.pc?.connectionState });
+      // Si solo se cayó el canal de la sala y la llamada sigue viva, se conserva. Si no, soy el último en llegar: la inicio.
+      if (accion !== 'mantener') startCall(otro, true);
     } else {
       closeCall();
       setRemote(null);
@@ -338,10 +365,40 @@
 
   function setConn(text) { $('#connInfo').textContent = text; }
 
+  /** Estado que se anota en cada latido (cada 30 s): si la página muere, el último latido dice cómo estaba. */
+  function latidoDatos() {
+    const v = state.localStream?.getVideoTracks()[0];
+    const a = state.localStream?.getAudioTracks()[0];
+    return {
+      grabando: !!state.rec,
+      grabadores: state.rec ? state.rec.recorders.map((r) => r.recorder.state).join('+') : '',
+      sala_ws: state.events?.readyState,
+      llamada: state.pc?.connectionState || 'ninguna',
+      ice: state.pc?.iceConnectionState,
+      con: state.remote?.name,
+      cam: v?.readyState,
+      cam_apagada: v?.muted,
+      mic: a?.readyState,
+      reloj_rtt_ms: Math.round(state.clock.rtt),
+      subidas_pendientes: state.uploaders.filter((u) => !u.finished).length,
+      subidas_con_error: state.uploaders.filter((u) => u.error).length,
+    };
+  }
+
+  /** Anota cuando la cámara o el micro se paran o se quedan sin señal (un fallo así cortaría la grabación). */
+  function vigilarPistas(stream) {
+    for (const t of stream.getTracks()) {
+      t.addEventListener('ended', () => Registro.anotar('error', { mensaje: `pista ${t.kind} terminada`, etiqueta: t.label }));
+      t.addEventListener('mute', () => Registro.anotar('pista-sin-senal', { tipo: t.kind }));
+      t.addEventListener('unmute', () => Registro.anotar('pista-con-senal', { tipo: t.kind }));
+    }
+  }
+
   function sendSignal(to, data) {
     state.signalChain = state.signalChain.then(() => fetch(`/api/rooms/${encodeURIComponent(state.room)}/signal`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: state.me.id, to, data }),
+      // `cid` identifica esta llamada: permite a la otra parte distinguir mensajes de una llamada anterior.
+      body: JSON.stringify({ from: state.me.id, to, data: { cid: state.callId, ...data } }),
     })).catch((err) => console.warn('señal', err));
     return state.signalChain;
   }
@@ -357,9 +414,15 @@
   function startCall(peer, offerer) {
     closeCall();
     state.offerer = offerer;
+    state.callId = randomId();
+    state.remoteCid = null;
+    if (offerer) state.rehaciendo = false;
     setRemote({ ...peer, stream: new MediaStream() });
     const pc = new RTCPeerConnection({ iceServers: state.iceServers });
     state.pc = pc;
+    Registro.anotar('llamada-inicia', { con: peer.name, ofrece: offerer, cid: state.callId });
+    pc.oniceconnectionstatechange = () => Registro.anotar('ice', { estado: pc.iceConnectionState });
+    pc.onsignalingstatechange = () => Registro.anotar('senalizacion', { estado: pc.signalingState });
     for (const t of state.localStream.getTracks()) pc.addTrack(t, state.localStream);
     // Prioriza calidad de la llamada sin afectar a la grabación local (que usa la cámara directamente).
     for (const s of pc.getSenders()) {
@@ -381,8 +444,9 @@
     };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
+      Registro.anotar('llamada', { estado: st });
       $('#remoteState').textContent = { connected: '', connecting: 'conectando…', failed: 'sin conexión de vídeo', disconnected: 'reconectando…' }[st] ?? st;
-      if (st === 'connected') reportRoute(pc);
+      if (st === 'connected') { state.rehaciendo = false; reportRoute(pc); }
       if (st === 'failed') {
         if (state.offerer) pc.restartIce();
         toast(state.hasTurn
@@ -434,13 +498,31 @@
       if (!pair) stats.forEach((r) => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
       const local = pair && stats.get(pair.localCandidateId);
       const relay = local?.candidateType === 'relay';
+      Registro.anotar('ruta', { tipo: relay ? 'TURN' : 'directa', candidato: local?.candidateType });
       $('#routeInfo').textContent = relay ? 'llamada vía TURN' : 'llamada directa';
       $('#routeInfo').hidden = false;
     } catch { /* sin estadísticas */ }
   }
 
   async function onSignal({ from, data }) {
-    if (!state.pc || state.remote?.id !== from) return;
+    if (!state.remote || state.remote.id !== from) return;
+    // La otra parte rehízo su llamada como respondedora y pide que ofrezca una nueva (o decidimos por desempate).
+    if (data.reiniciar) {
+      const accion = Llamada.alPedirReinicio({ yoTambienRehago: !!state.rehaciendo, miId: state.me.id, otroId: from });
+      Registro.anotar('reinicio-pedido', { accion });
+      if (accion === 'ofrecer') startCall(state.remote, true);
+      return;
+    }
+    const esOferta = data.description?.type === 'offer';
+    // Una oferta de otra conexión de la misma persona: se rehace la llamada de cero en lugar de mezclarla con la actual.
+    if (esOferta && Llamada.ofertaNueva({ cidActual: state.remoteCid, cidMensaje: data.cid })) {
+      Registro.anotar('oferta-nueva', { cid: data.cid });
+      startCall(state.remote, false);
+    }
+    // Mensajes sueltos (candidatos) de una llamada anterior que ya no existe: se ignoran.
+    if (Llamada.esDeLlamadaAnterior({ cidActual: state.remoteCid, cidMensaje: data.cid, esOferta })) return;
+    if (data.cid) state.remoteCid = data.cid;
+    if (!state.pc) return;
     const pc = state.pc;
     try {
       if (data.description) {
@@ -503,6 +585,7 @@
     };
     const rec = { session, startLocal, recorders: [], worklet: null, canvasTimer: null, stopping: false };
     state.rec = rec;
+    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate });
     requestWakeLock();
     setRecordingUi('armed');
 
@@ -571,11 +654,16 @@
       if (!info.mime && e.data.type) info.mime = e.data.type;
       uploader.push(e.data);
     };
+    recorder.onstart = () => Registro.anotar('grabador-inicio', { pista: info.kind, mime: info.mime });
     recorder.onstop = () => {
+      Registro.anotar('grabador-fin', { pista: info.kind });
       // Se espera a que se guarde el último trozo antes de cerrar la pista.
       setTimeout(() => uploader.finish(finishInfo(r.startedAtServer, r.endedAtServer, r.beepAt, r.endBeepAt)), 200);
     };
-    recorder.onerror = (e) => toast(`Error del grabador (${info.kind}): ${e.error?.message || ''}`, 'error');
+    recorder.onerror = (e) => {
+      Registro.anotar('error', { mensaje: `grabador ${info.kind}: ${e.error?.message || e.error?.name || ''}` });
+      toast(`Error del grabador (${info.kind}): ${e.error?.message || ''}`, 'error');
+    };
     return r;
   }
 
@@ -627,6 +715,7 @@
     const rec = state.rec;
     if (!rec || rec.stopping) return;
     rec.stopping = true;
+    Registro.anotar('grabacion-fin', { sesion: session.id });
     const stopLocal = (session.stopAt || serverNow()) - state.clock.offset;
     // Pitido final: con el inicial permite medir y corregir la deriva entre los relojes de los dispositivos.
     const endBeepLocal = session.endBeepAt ? session.endBeepAt - state.clock.offset : null;

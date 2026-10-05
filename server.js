@@ -33,6 +33,17 @@ const REC_DIR = path.resolve(process.env.GRABACIONES_DIR || path.join(ROOT, 'gra
 const CERT_DIR = path.join(ROOT, 'certs');
 const MAX_CHUNK = 64 * 1024 * 1024;
 const MAX_PEERS = 2;
+// Si una persona pierde la conexión con la sala (un parpadeo del wifi, de la red del iPad, del túnel…) no se
+// cuelga la llamada de inmediato: se le da tiempo a volver. Un cierre «limpio» (cerró la pestaña a propósito) casi no espera.
+const graciaMs = () => Number(process.env.GRACIA_MS ?? 45000);
+const graciaLimpiaMs = () => Number(process.env.GRACIA_LIMPIA_MS ?? 4000);
+// Pings de la sala cada 15 s; se da por muerta una conexión tras este número de pings sin respuesta (≈ 45 s).
+const PINGS_SIN_RESPUESTA = Number(process.env.PINGS_SIN_RESPUESTA ?? 3);
+
+// Registro en logs/estudio-AAAA-MM-DD.log: qué pasó y cuándo, para poder explicar una caída a posteriori.
+const { crearRegistro } = require('./lib/log');
+const registro = crearRegistro(path.join(__dirname, 'logs'));
+const slog = (evento, datos) => registro.escribir('servidor', evento, datos);
 
 const now = () => performance.timeOrigin + performance.now();
 const ACCESS_KEY = ensureAccessKey();
@@ -87,8 +98,13 @@ function getRoom(name) {
   return r;
 }
 
+/** Envía un evento a una persona; si está ausente (sin conexión) no se envía y devuelve false. */
 function send(peer, event, data) {
-  if (peer.ws.readyState === 1) peer.ws.send(JSON.stringify({ event, data }));
+  if (peer.ws && peer.ws.readyState === 1) {
+    peer.ws.send(JSON.stringify({ event, data }));
+    return true;
+  }
+  return false;
 }
 
 function broadcast(room, event, data, exceptId) {
@@ -96,7 +112,7 @@ function broadcast(room, event, data, exceptId) {
 }
 
 function peerList(room) {
-  return [...room.peers.values()].map(({ id, name, device }) => ({ id, name, device }));
+  return [...room.peers.values()].map(({ id, name, device, ausente }) => ({ id, name, device, ausente: !!ausente }));
 }
 
 function sessionDir(room, id) { return path.join(REC_DIR, room, id); }
@@ -196,8 +212,28 @@ async function handle(req, res) {
       const msg = await readJson(req);
       const to = room.peers.get(msg.to);
       if (!to) return json(res, 404, { error: 'Destino no conectado' });
-      send(to, 'signal', { from: msg.from, data: msg.data });
-      return json(res, 200, { ok: true });
+      // Si el destino está ausente (reconectando) el mensaje se pierde: se anota, no es un error.
+      if (!send(to, 'signal', { from: msg.from, data: msg.data })) {
+        slog('senal-no-entregada', { sala: roomName, de: msg.from, para: msg.to, motivo: 'ausente' });
+        return json(res, 200, { ok: true, entregado: false });
+      }
+      return json(res, 200, { ok: true, entregado: true });
+    }
+
+    // Registro enviado por las páginas (conexión, errores, latidos): se guarda junto al del servidor.
+    if (action === 'log' && req.method === 'POST') {
+      const msg = await readJson(req);
+      const quien = slug(msg.nombre || msg.peer, 'anonimo');
+      const eventos = Array.isArray(msg.eventos) ? msg.eventos.slice(0, 200) : [];
+      for (const e of eventos) {
+        if (!e || typeof e !== 'object') continue;
+        const datos = { peer: msg.peer, hora_cliente: e.hora };
+        for (const [k, v] of Object.entries(e.d || {})) {
+          if (/^[a-z0-9_]{1,30}$/i.test(k) && ['string', 'number', 'boolean'].includes(typeof v)) datos[k] = v;
+        }
+        registro.escribir(`cliente:${quien}`, String(e.ev || 'evento').replace(/[^a-z0-9_.-]/gi, '_').slice(0, 40), datos);
+      }
+      return json(res, 200, { ok: true, n: eventos.length });
     }
 
     if (action === 'status' && req.method === 'POST') {
@@ -224,6 +260,7 @@ async function handle(req, res) {
         sessions.set(`${roomName}/${id}`, s);
         saveSession(s);
         room.session = { id, startAt, beepAt: s.beepAt, recording: true };
+        slog('grabacion-inicio', { sala: roomName, sesion: id, personas: peerList(room).map((p) => p.name).join(',') });
         broadcast(room, 'record-start', room.session);
         return json(res, 200, room.session);
       }
@@ -236,6 +273,7 @@ async function handle(req, res) {
         room.session = { ...room.session, recording: false, stopAt, endBeepAt };
         const s = sessions.get(`${roomName}/${room.session.id}`);
         if (s) { s.stopAt = stopAt; s.endBeepAt = endBeepAt; saveSession(s); }
+        slog('grabacion-fin', { sala: roomName, sesion: room.session.id, pedida_por: msg.from });
         broadcast(room, 'record-stop', room.session);
         return json(res, 200, room.session);
       }
@@ -377,11 +415,18 @@ function attachSignaling(server, { requireKey = false } = {}) {
   });
   const ping = setInterval(() => {
     for (const ws of wss.clients) {
-      if (ws.alive === false) { ws.terminate(); continue; }
-      ws.alive = false;
+      // Una conexión solo se da por muerta tras varios pings sin respuesta seguidos: un iPad que tarda en
+      // contestar un momento (pantalla, wifi) no debe tirar la sala.
+      if ((ws.sinRespuesta || 0) >= PINGS_SIN_RESPUESTA) {
+        slog('ping-sin-respuesta', { peer: ws.etiqueta, pings: ws.sinRespuesta });
+        ws.terminate();
+        continue;
+      }
+      ws.sinRespuesta = (ws.sinRespuesta || 0) + 1;
       ws.ping();
     }
   }, 15000);
+  ping.unref?.();
   server.on('close', () => clearInterval(ping));
   return wss;
 }
@@ -390,29 +435,75 @@ function onPeerSocket(ws, rawRoom, params, req) {
   const roomName = slug(rawRoom, 'sala');
   const room = getRoom(roomName);
   const id = slug(params.get('peer'), '');
-  ws.alive = true;
-  ws.on('pong', () => { ws.alive = true; });
+  ws.sinRespuesta = 0;
+  ws.on('pong', () => { ws.sinRespuesta = 0; });
   if (!id) { ws.close(4000, 'Falta peer'); return; }
+  const name = String(params.get('name') || 'Invitado').slice(0, 40);
+  const device = String(params.get('device') || '').slice(0, 40);
+  ws.etiqueta = `${name}/${id}`;
   const existing = room.peers.get(id);
+  // Quien se había caído y no volvió sigue ocupando su sitio hasta que acabe su gracia. Si llega alguien
+  // nuevo (p. ej. la misma persona con la pestaña recargada, que trae otro identificador) se libera ese sitio.
+  if (!existing) liberarAusentes(room, roomName, name, device);
   if (!existing && room.peers.size >= MAX_PEERS) {
     ws.send(JSON.stringify({ event: 'room-full', data: { error: 'La sala está llena (máximo 2 personas)' } }));
     ws.close(4009, 'Sala llena');
     return;
   }
-  if (existing) existing.ws.close(4001, 'Reemplazado');
-  const peer = { id, name: String(params.get('name') || 'Invitado').slice(0, 40), device: String(params.get('device') || '').slice(0, 40), ws };
-  room.peers.set(id, peer);
+  let peer = existing;
+  let volvio = false;
+  if (existing) {
+    // Es la misma página que reconecta (mismo identificador): vuelve a su sitio sin cambiar nada más.
+    if (existing.timer) { clearTimeout(existing.timer); existing.timer = null; }
+    volvio = !!existing.ausente;
+    const anterior = existing.ws;
+    Object.assign(existing, { ws, ausente: false, name, device, desde: Date.now() });
+    if (anterior && anterior !== ws) anterior.close(4001, 'Reemplazado');
+    slog(volvio ? 'ws-reconectado' : 'ws-reemplazado', { sala: roomName, peer: id, nombre: name, ausente_s: existing.ausenteDesde ? (Date.now() - existing.ausenteDesde) / 1000 : undefined });
+  } else {
+    peer = { id, name, device, ws, timer: null, ausente: false, desde: Date.now() };
+    room.peers.set(id, peer);
+    slog('ws-abierto', { sala: roomName, peer: id, nombre: name, dispositivo: device, ua: req.headers['user-agent'] });
+  }
   // Quien abre la sala en este mismo PC recibe el enlace de invitación ya copiado en el portapapeles.
   const inviteCopied = room.peers.size === 1 && isLocalRequest(req) && publicUrl
     ? copyToClipboard(inviteLink(roomName)) : false;
-  send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session, inviteCopied });
-  broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device }, id);
-  ws.on('close', () => {
-    if (room.peers.get(id) !== peer) return;
-    room.peers.delete(id);
-    broadcast(room, 'peer-left', { id });
-    if (!room.peers.size && !room.session?.recording) rooms.delete(roomName);
+  send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session, inviteCopied, volvio });
+  broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device, volvio }, id);
+  ws.on('close', (code, reason) => {
+    if (peer.ws !== ws) return;           // ya lo ha reemplazado otra conexión suya
+    const limpio = code === 1000 || code === 1005;
+    slog('ws-cerrado', { sala: roomName, peer: id, nombre: peer.name, codigo: code, motivo: reason?.toString(), conectado_s: (Date.now() - peer.desde) / 1000 });
+    peer.ws = null;
+    const espera = limpio ? 0 : (code === 1001 ? graciaLimpiaMs() : graciaMs());
+    const salir = () => {
+      if (room.peers.get(id) !== peer) return;
+      room.peers.delete(id);
+      slog('peer-salio', { sala: roomName, peer: id, nombre: peer.name });
+      broadcast(room, 'peer-left', { id });
+      if (!room.peers.size && !room.session?.recording) rooms.delete(roomName);
+    };
+    if (!espera) { salir(); return; }
+    peer.ausente = true;
+    peer.ausenteDesde = Date.now();
+    // Se avisa a la otra persona, pero la llamada no se cuelga: puede que solo haya sido el canal de la sala.
+    broadcast(room, 'peer-away', { id, graciaMs: espera });
+    slog('peer-ausente', { sala: roomName, peer: id, nombre: peer.name, gracia_s: espera / 1000 });
+    peer.timer = setTimeout(salir, espera);
+    peer.timer.unref?.();
   });
+}
+
+/** Libera los sitios de personas ausentes que no han vuelto, para dejar entrar a quien llega. */
+function liberarAusentes(room, roomName, name, device) {
+  const fuera = (p, motivo) => {
+    clearTimeout(p.timer);
+    room.peers.delete(p.id);
+    slog('peer-reemplazado', { sala: roomName, peer: p.id, nombre: p.name, motivo });
+    broadcast(room, 'peer-left', { id: p.id });
+  };
+  for (const p of [...room.peers.values()]) if (p.ausente && p.name === name && p.device === device) fuera(p, 'misma persona vuelve con otra página');
+  for (const p of [...room.peers.values()]) if (p.ausente && room.peers.size >= MAX_PEERS) fuera(p, 'sala llena');
 }
 
 /** Conexión hecha desde este mismo PC (no a través de un túnel ni de la red local). */
@@ -640,7 +731,12 @@ async function main() {
     });
     httpServer.listen(HTTP_PORT, r);
   });
-  console.log(`\n🎙  Estudio en marcha. Grabaciones en: ${REC_DIR}\n`);
+  slog('arranque', { pid: process.pid, node: process.version, turn: hasTurn(), grabaciones: REC_DIR, logs: registro.carpeta() });
+  // Un error que se escapa también queda anotado (y se muestra), para no perder la pista de por qué cayó el servidor.
+  process.on('uncaughtException', (err) => { slog('error-no-capturado', { mensaje: err?.message, pila: String(err?.stack || '').split('\n')[1]?.trim() }); console.error(err); });
+  process.on('unhandledRejection', (err) => { slog('promesa-rechazada', { mensaje: err?.message || String(err) }); console.error(err); });
+  console.log(`\n🎙  Estudio en marcha. Grabaciones en: ${REC_DIR}`);
+  console.log(`   Registro de lo que ocurre: ${registro.carpeta()}\n`);
   console.log(`   En este PC:          http://localhost:${HTTP_PORT}`);
   const tls = await loadOrCreateCert(ips);
   if (tls) {

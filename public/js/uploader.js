@@ -155,6 +155,11 @@
           this._emit();
         } catch (err) {
           this.error = err.message || String(err);
+          // Se anota el primer error, y luego uno de cada 20, para no llenar el registro si la red está caída.
+          this._erroresRegistrados = (this._erroresRegistrados || 0) + 1;
+          if (this._erroresRegistrados <= 3 || this._erroresRegistrados % 20 === 0) {
+            window.Registro?.anotar('subida-error', { pista: this.info?.kind, mensaje: this.error, veces: this._erroresRegistrados, fatal: !!err.fatal });
+          }
           this._emit();
           if (err.fatal) return;
           await sleep(delay);

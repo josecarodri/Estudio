@@ -160,12 +160,37 @@ en la forma de onda de cada pista (o usa «sincronizar por audio»).
 
 - Cada segundo de grabación se guarda primero **en el propio dispositivo** (IndexedDB) y después se sube en orden.
   Si internet se corta, la grabación continúa y la subida se reanuda sola al volver la conexión.
-- Si se cae la conexión con la sala, se reconecta automáticamente y la llamada se restablece.
+- Si se cae la conexión con la sala (un parpadeo del wifi, de la red del iPad o del túnel), la otra persona **no cuelga
+  la llamada**: se le da un **periodo de gracia de 45 s** para volver. Si vuelve con la misma página, la llamada
+  (vídeo y audio, que van por otro camino) sigue como estaba, sin imagen congelada. Solo se rehace si la llamada
+  murió de verdad o si la persona vuelve con una página nueva (p. ej. tras recargar). Un cierre a propósito de la
+  pestaña apenas espera.
 - Si se cierra la pestaña a mitad de la subida, al volver a abrir el estudio aparece **«Grabaciones sin terminar de
   subir»** con opciones para subirlas, descargarlas o borrarlas.
 - Tras grabar, cada pista tiene un botón **Descargar copia** que la reconstruye desde el dispositivo.
 - Si el servidor se reinicia, las pistas continúan donde se quedaron (con `npm run internet` el enlace cambia: el
   invitado debe abrir el nuevo para terminar de subir).
+
+## Si algo falla: el registro
+
+El estudio anota lo que ocurre en `logs/estudio-AAAA-MM-DD.log` (un archivo por día, texto plano). El servidor y las
+páginas de cada persona escriben ahí, con la hora:
+
+```
+21:36:41.003 cliente:jc latido grabando=si grabadores=recording+recording+... llamada=connected memoria_mb=212
+21:36:50.412 servidor ws-cerrado sala=dtp peer=ce00… nombre=JC codigo=1006 conectado_s=3512
+21:36:50.413 servidor peer-ausente sala=dtp peer=ce00… nombre=JC gracia_s=45
+```
+
+- **`latido`**: cada 30 s, el estado de cada página (grabando, estado de la llamada, memoria, subidas pendientes). Si una
+  página muere de golpe, el **último latido** dice cuándo y cómo estaba.
+- **`ws-cerrado` / `peer-ausente` / `ws-reconectado` / `peer-salio`**: la conexión con la sala, con el código de cierre
+  (`1006` = corte sin aviso, que es lo típico de un fallo de red o de que el navegador se cierre de golpe).
+- **`error`**: errores de la página, del grabador o de la cámara.
+- Al avisar de un problema, **guarda ese archivo** (y, en Windows, mira si Edge o Chrome dejaron un informe en
+  `%LOCALAPPDATA%\Microsoft\Edge\User Data\Crashpad\reports`).
+
+Ajustes opcionales en `.env`: `GRACIA_MS` (45000), `PINGS_SIN_RESPUESTA` (3 pings de 15 s) y `LOGS_DIR`.
 
 ## Estructura
 
