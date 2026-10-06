@@ -22,6 +22,9 @@
         <strong>Alinear grabaciones (Windows).bat</strong> (o ejecuta <code>npm run alinear</code>) en la carpeta del estudio. Requiere <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">ffmpeg</a> (en Windows: <code>winget install Gyan.FFmpeg</code>).
         Además corrige la deriva entre los relojes de los dos dispositivos usando el pitido final.
         En esos archivos los pitidos quedan silenciados (usa <code>--mantener-pitido</code> si lo quieres conservar).</p>
+      <p>Para el podcast no hace falta descargar nada: el editor (<code>node cli.js importar --copiar</code>, en el repo
+        <code>Personal</code>) copia las sesiones directamente de esta carpeta, en orden y con su <code>session.json</code>.
+        Si las descargas, cada archivo llega con su sesión delante del nombre para que no se confundan.</p>
     </section>
     <div id="sessions"><p class="muted">Cargando…</p></div>
   </main>
@@ -40,7 +43,7 @@
           const file = s.files.find((f) => f.name === t.file);
           const offset = t.startedAtServer != null && s.startAt ? ((t.startedAtServer - s.startAt) / 1000) : null;
           return `<tr>
-            <td>${esc(p.name)}<br><span class="muted">${esc(p.device)}</span></td>
+            <td>${esc(p.name)}<br><span class="muted">${esc(p.device)}${p.retomada ? ' · tramo retomado' : p.tarde ? ' · empezó tarde' : ''}</span></td>
             <td>${KIND[t.kind] || esc(t.kind)}</td>
             <td>${file ? `<a href="${file.url}">${esc(t.file)}</a><br><span class="muted">${fmtBytes(file.bytes)}</span>` : esc(t.file)}</td>
             <td>${offset == null ? '—' : `${offset >= 0 ? '+' : ''}${offset.toFixed(3)} s`}</td>

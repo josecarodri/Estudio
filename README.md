@@ -35,7 +35,13 @@ Por cada persona, en `grabaciones/<sala>/<fecha_hora>/` del PC:
 | `ana_llamada.mp4` / `.webm` | La llamada tal como se vio: las dos cámaras lado a lado (720p) + el audio de ambos. Referencia opcional. |
 | `session.json` | Tiempos de cada pista en el reloj común y datos para sincronizar. |
 
-El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graba en MP4 si puede y si no en WebM.
+El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graba en MP4 si puede y si no en WebM. La cámara se
+pide a 30 fps como mucho (si la cámara lo admite): el montaje va a 30, y a 60 se gastan los bits en fotogramas que se tiran.
+
+Al descargarlos desde **Grabaciones**, los archivos llegan con la sesión delante del nombre
+(`2026-10-10_21-30-05_ana_camara.mp4`): si bajas varias sesiones a la misma carpeta no se confunden. Para editar en
+este mismo PC no hace falta descargarlos: el editor (`node cli.js importar --copiar`, en el repo `Personal`) los
+copia directamente de `grabaciones/`, con su `session.json`.
 
 > **¿Usas Windows?** Sigue la guía paso a paso [INSTALAR-WINDOWS.md](INSTALAR-WINDOWS.md): se instala y se
 > arranca con doble clic, sin escribir comandos.
@@ -51,10 +57,9 @@ El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graba en MP4 si pu
 
 ## Uso desde ciudades distintas (por internet)
 
-En el PC, la primera vez:
+En el PC, la primera vez (en la carpeta del Estudio, la de este repositorio):
 
 ```bash
-cd estudio
 npm install
 ```
 
@@ -94,7 +99,7 @@ para verse y oírse hace falta un servidor TURN que retransmita la llamada. La o
 (1000 GB al mes) es **Cloudflare Realtime TURN**:
 
 1. Crea una cuenta gratuita en https://dash.cloudflare.com → **Realtime** → **TURN Server** → *Create*.
-2. Copia `.env.ejemplo` como `.env` (en la carpeta `estudio`) y pega el **Turn Token ID** y el **API Token**:
+2. Copia `.env.ejemplo` como `.env` (en la carpeta del Estudio) y pega el **Turn Token ID** y el **API Token**:
    ```
    CLOUDFLARE_TURN_KEY_ID=...
    CLOUDFLARE_TURN_API_TOKEN=...
@@ -106,12 +111,18 @@ para verse y oírse hace falta un servidor TURN que retransmita la llamada. La o
 También sirve cualquier otro TURN (coturn propio, Metered, Twilio…) con `TURN_URL`, `TURN_USER` y `TURN_PASS`.
 Recomendado configurarlo antes de una grabación importante.
 
-### ¿Prefieres una dirección fija? (Tailscale Funnel)
+### ¿Prefieres una dirección fija? (Tailscale Funnel) — recomendado para grabar episodios
 
 Con `PUBLICO=tailscale` en `.env` (o `node server.js --tailscale`) el estudio se publica con **Tailscale Funnel** en
 `https://<tu-pc>.<tu-red>.ts.net`, siempre la misma dirección. Requiere Tailscale instalado en el PC con sesión
 iniciada; la primera vez pide activar Funnel en el navegador. Ver [INSTALAR-WINDOWS.md](INSTALAR-WINDOWS.md#8-opcional-enlace-fijo-con-tailscale-funnel).
 El enlace solo responde mientras el estudio está abierto.
+
+Es lo recomendado para los episodios por una razón más que la comodidad: lo que el iPad aún no ha subido se guarda
+en Safari **para esa dirección**. Con el enlace de Cloudflare, si se cae el túnel y hay que arrancarlo de nuevo, el
+enlace nuevo es otra dirección y Safari no le deja ver lo guardado con la anterior: lo pendiente solo se puede rescatar
+con **Descargar copia** desde la página vieja. Con la dirección fija, al volver a abrirla aparece en «Grabaciones sin
+terminar de subir» y se sube con un toque.
 
 Otra opción: un túnel con nombre de Cloudflare o ngrok hacia `http://localhost:8090` y `PUBLIC_URL=https://…` en `.env`.
 
@@ -139,7 +150,9 @@ tiene cortafuegos, permite a Node.js conexiones en red privada.
    empiezan en el mismo instante, con la misma duración, vídeo H.264 a **30 fps constantes** y audio a 48 kHz, con los
    pitidos silenciados, y con dos personas una vista **`lado_a_lado.mp4`** (las dos cámaras juntas, para usar como tercer ángulo en un multicámara). Con el pitido final **corrige la deriva**: los relojes de dos dispositivos distintos nunca van
    exactamente a la misma velocidad y en una hora pueden separarse decenas de milisegundos; el alineado estira o encoge
-   cada pista para compensarlo.
+   cada pista para compensarlo. Un tramo que empezó tarde (retomado tras una caída, o de una página que se unió con la
+   grabación en marcha) se coloca en su sitio con silencio y negro delante, y una pista que se cortó antes de tiempo no
+   recorta a las demás.
 
 En las pruebas, con 120 ms de latencia simulada entre los dos, el inicio queda alineado con menos de 1 ms de
 diferencia; con una deriva exagerada de ±300 ppm (18 ms por minuto), tras corregirla quedan a ±1,5 ms.
@@ -174,11 +187,24 @@ en la forma de onda de cada pista (o usa «sincronizar por audio»).
   navegadores no dejan arrancar el audio sin un gesto del usuario. La parte que se grabó antes de la caída se conserva
   (hasta el último trozo subido). Para sincronizar el tramo nuevo no hay pitido de inicio: se alinea con la grabación
   de la llamada y con la hora de inicio de cada pista.
+- **Si una página se pierde la orden de grabar** (se cortó su conexión justo al pulsar ● Grabar) **o entra con la
+  grabación ya en marcha**, empieza a grabar sola en unos segundos, como un tramo sin pitido (en `session.json`,
+  `tarde: true`). **Si se pierde la de parar**, para sola. Cada página comprueba el estado de la sala cada 5 s, además
+  de al volver a conectarse. Antes, quien se perdía la orden de grabar no grababa nada en toda la sesión.
+- Sobre la imagen de la otra persona se ve si graba: **● REC**, o **⚠ NO ESTÁ GRABANDO** en ámbar si a los 5 s de
+  empezar su página aún no graba.
 - Si se cierra la pestaña a mitad de la subida, al volver a abrir el estudio aparece **«Grabaciones sin terminar de
-  subir»** con opciones para subirlas, descargarlas o borrarlas.
+  subir»** con opciones para subirlas, descargarlas o borrarlas. Lo que el servidor ya confirmó entero se borra del
+  dispositivo al volver a abrir el estudio (antes se quedaba para siempre, unos 10 GB por episodio).
 - Tras grabar, cada pista tiene un botón **Descargar copia** que la reconstruye desde el dispositivo.
-- Si el servidor se reinicia, las pistas continúan donde se quedaron (con `npm run internet` el enlace cambia: el
-  invitado debe abrir el nuevo para terminar de subir).
+- Si el servidor se reinicia, las pistas continúan donde se quedaron (si se cayó justo entre guardar un trozo y
+  apuntarlo, ese trozo no queda duplicado). Con `npm run internet` el enlace cambia: lo que el invitado tenga pendiente
+  solo se puede rescatar desde su página vieja con **Descargar copia** (ver Tailscale, más arriba). Si tras el reinicio
+  el servidor ya no tiene la grabación en marcha, **■ Detener** la para igualmente en esa página.
+- Los WAV valen en todo momento (su cabecera se actualiza con cada trozo), aunque la página muera antes de cerrarlos,
+  y la hora de inicio de cada pista queda en `session.json` en cuanto se sabe.
+- Si el audio del dispositivo se detiene en plena grabación (en el iPad: una llamada, Siri…), la página avisa para
+  reanudarlo con un toque, y el registro lo anota (`audio-estado`, y `audio_retraso_ms` en los latidos).
 
 ## Si algo falla: el registro
 

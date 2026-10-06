@@ -12,7 +12,7 @@ choice /c 12 /n /m "  Pulsa 1 o 2: "
 if errorlevel 2 goto cloudflare
 
 set "MODO=tailscale"
-where tailscale >/dev/null 2>/dev/null && goto guardar
+where tailscale >nul 2>nul && goto guardar
 if exist "%ProgramFiles%\Tailscale\tailscale.exe" goto guardar
 echo.
 echo  Tailscale no está instalado. Se abre su página de descarga:
