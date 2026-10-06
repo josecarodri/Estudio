@@ -140,9 +140,11 @@
     const camId = $('#camera').value;
     const micId = $('#mic').value;
     if (state.localStream) state.localStream.getTracks().forEach((t) => t.stop());
-    const constraints = {
+    // Como mucho 30 fps: el montaje va a 30, y una cámara a 60 gasta el doble de bits por segundo en
+    // fotogramas que luego se tiran (peor calidad por fotograma) y el doble de trabajo al editar.
+    const constraints = (conTope) => ({
       video: {
-        width: { ideal: res.width }, height: { ideal: res.height }, frameRate: { ideal: 30 },
+        width: { ideal: res.width }, height: { ideal: res.height }, frameRate: conTope ? { ideal: 30, max: 30 } : { ideal: 30 },
         ...(camId ? { deviceId: { exact: camId } } : { facingMode: 'user' }),
       },
       audio: {
@@ -150,8 +152,14 @@
         echoCancellation: processing, noiseSuppression: processing, autoGainControl: processing,
         ...(micId ? { deviceId: { exact: micId } } : {}),
       },
-    };
-    state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    });
+    try {
+      state.localStream = await navigator.mediaDevices.getUserMedia(constraints(true));
+    } catch (err) {
+      // Alguna cámara no admite el tope: entonces sin él, como antes.
+      if (err.name !== 'OverconstrainedError') throw err;
+      state.localStream = await navigator.mediaDevices.getUserMedia(constraints(false));
+    }
     vigilarPistas(state.localStream);
     $('#preview').srcObject = state.localStream;
     $('#localVideo').srcObject = state.localStream;
@@ -192,6 +200,16 @@
     let ctx;
     try { ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' }); } catch { ctx = new AudioContext(); }
     await ctx.resume();
+    // Si el audio se detiene (en iPad: una llamada, Siri, salir de Safari…), el WAV se queda sin esas muestras
+    // y lo que viene detrás se adelanta. Se anota, se intenta reanudar y, si hace falta, se pide un toque.
+    ctx.onstatechange = () => {
+      Registro.anotar('audio-estado', { estado: ctx.state, grabando: !!state.rec });
+      if (ctx.state !== 'running' && state.rec) {
+        ctx.resume().catch(() => {});
+        toast('El audio se ha detenido: toca la pantalla para reanudarlo.', 'error');
+      }
+    };
+    document.addEventListener('pointerdown', () => { if (ctx.state !== 'running') ctx.resume().catch(() => {}); });
     await ctx.audioWorklet.addModule('js/pcm-worklet.js');
     const recBus = ctx.createGain();          // micrófono + claqueta → grabaciones locales
     const mixBus = ctx.createGain();          // recBus + audio remoto → grabación de la llamada
@@ -308,9 +326,58 @@
     Registro.iniciar({ room, peer: state.me.id, nombre: name, latido: latidoDatos });
     Registro.anotar('sala', { sala: room, nombre: name, dispositivo: state.me.device, resolucion: $('#resolution').value });
     connectEvents();
+    // Red de seguridad por si se pierde una orden de grabar o de parar (un corte justo entonces), y el
+    // estado propio repetido de vez en cuando por si la otra página se perdió el último.
+    setInterval(vigilarGrabacion, 5000);
+    setInterval(sendStatus, 5000);
     window.addEventListener('beforeunload', (e) => {
       if (state.rec || state.uploaders.some((u) => !u.finished)) { e.preventDefault(); e.returnValue = ''; }
     });
+  }
+
+  /**
+   * Mira cómo está la grabación de la sala en el servidor y corrige esta página si se perdió una orden:
+   * empieza (un tramo sin pitido) si hay una grabación en marcha y no graba, y para si sigue grabando una
+   * sesión que ya terminó. Se deja tiempo a la orden normal, que llega con cuenta atrás y pitido.
+   */
+  let vigilando = false;
+  async function vigilarGrabacion() {
+    if (vigilando || state.rec?.stopping) return;
+    vigilando = true;
+    try {
+      const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/sesion`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const { session } = await r.json();
+      const accion = Llamada.alRecibirGrabacion({ recuperando: false, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: session });
+      if (accion === 'nada' || Llamada.esPronto({ accion, sesion: session, ahora: serverNow() })) return;
+      Registro.anotar('grabacion-corregida', { accion, sesion: session?.id });
+      aplicarGrabacion(accion, session);
+    } catch { /* sin conexión: se vuelve a mirar en unos segundos */ } finally {
+      vigilando = false;
+    }
+  }
+
+  /** Lleva a cabo lo que decidió Llamada.alRecibirGrabacion. */
+  function aplicarGrabacion(accion, sesion) {
+    if (accion === 'retomar' || accion === 'unirse') {
+      if (accion === 'retomar') state.recuperando = false;   // una sola vez: las bienvenidas siguientes no arrancan otra
+      // Si la hora de empezar aún no ha llegado, se empieza como siempre (con pitido); si ya pasó, como tramo tardío.
+      const tarde = !(sesion.startAt - serverNow() > 500);
+      toast(accion === 'retomar' ? 'Retomando la grabación…' : 'Hay una grabación en marcha: empiezas a grabar ya.', 'warn');
+      startRecording(sesion, tarde ? { tarde: true, retomada: accion === 'retomar' } : {})
+        .catch((err) => { console.error(err); toast(`No se pudo grabar: ${err.message}`, 'error'); });
+    } else if (accion === 'parar') {
+      toast('La grabación ya había terminado: se para también aquí.', 'warn');
+      stopRecording(sesion);   // si su pitido final aún no ha sonado, se graba; si ya pasó, se para sin él
+    } else if (accion === 'cambiar') {
+      // Se para ya la sesión vieja y, en cuanto termina, se une a la nueva.
+      stopRecording({ ...state.rec.session, stopAt: serverNow(), endBeepAt: null });
+      setTimeout(() => aplicarGrabacion('unirse', sesion), 500);
+    } else if (accion === 'terminada') {
+      state.recuperando = false;
+      marcarRecuperacion(null);
+      toast('La grabación ya había terminado. Los archivos que no se llegaron a subir aparecen en «Grabaciones sin terminar de subir».', 'warn');
+    }
   }
 
   function updateClock(c) {
@@ -350,6 +417,7 @@
           return;
         }
         toast(`${p.name} ha entrado`);
+        sendStatusSoon();   // que sepa enseguida si esta página graba
         startCall(p, false);
         // Misma página pero con su llamada muerta: se pide a la otra parte que ofrezca una nueva.
         if (p.volvio && mismoRemoto) { state.rehaciendo = true; sendSignal(p.id, { reiniciar: true }); }
@@ -368,7 +436,11 @@
       },
       signal: onSignal,
       status: (d) => { state.remoteStatus = d.status; renderRemoteStatus(); },
-      'record-start': (d) => startRecording(d).catch((err) => { console.error(err); toast(`Error al grabar: ${err.message}`, 'error'); }),
+      'record-start': (d) => {
+        // Si esta página seguía grabando una sesión anterior (se perdió su parada), la cierra y empieza la nueva.
+        if (state.rec && state.rec.session.id !== d.id) { aplicarGrabacion('cambiar', d); return; }
+        startRecording(d).catch((err) => { console.error(err); toast(`Error al grabar: ${err.message}`, 'error'); });
+      },
       'record-stop': stopRecording,
       'room-full': (d) => { state.roomFull = true; setConn('Sala llena'); toast(d.error, 'error'); },
     };
@@ -389,6 +461,7 @@
 
   function onWelcome(d) {
     setConn('Conectado a la sala');
+    sendStatusSoon();   // la otra persona ve enseguida si esta página graba o no
     if (d.inviteCopied) toast('Enlace de invitación copiado: pégalo en WhatsApp o en un correo para la otra persona.');
     if (d.peers.length) {
       const otro = d.peers[0];
@@ -400,19 +473,10 @@
       closeCall();
       setRemote(null);
     }
-    const accion = Llamada.alRecibirGrabacion({ recuperando: state.recuperando, grabandoYa: !!state.rec, sesionEnCurso: !!d.session?.recording });
+    // Al (re)entrar se mira la grabación de la sala: si se perdió la orden de grabar o de parar, se corrige ya.
+    const accion = Llamada.alRecibirGrabacion({ recuperando: state.recuperando, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: d.session });
     if (accion !== 'nada') Registro.anotar('grabacion-en-curso', { accion, sesion: d.session?.id });
-    if (accion === 'retomar') {
-      state.recuperando = false;       // una sola vez: las bienvenidas siguientes (reconexión) no arrancan otra grabación
-      toast('Retomando la grabación…');
-      startRecording(d.session, { tarde: true }).catch((err) => { console.error(err); toast(`No se pudo retomar la grabación: ${err.message}`, 'error'); });
-    } else if (accion === 'terminada') {
-      state.recuperando = false;
-      marcarRecuperacion(null);
-      toast('La grabación ya había terminado. Los archivos que no se llegaron a subir aparecen en «Grabaciones sin terminar de subir».', 'warn');
-    } else if (accion === 'avisar') {
-      toast('Hay una grabación en curso; empezará con la próxima.', 'warn');
-    }
+    if (accion !== 'parar' || !state.rec?.stopping) aplicarGrabacion(accion, d.session);
   }
 
   function setConn(text) { $('#connInfo').textContent = text; }
@@ -434,6 +498,12 @@
       reloj_rtt_ms: Math.round(state.clock.rtt),
       subidas_pendientes: state.uploaders.filter((u) => !u.finished).length,
       subidas_con_error: state.uploaders.filter((u) => u.error).length,
+      audio: state.ctx?.state,
+      // Cuánto se ha quedado atrás el reloj del audio desde que empezó la grabación: si el audio se detuvo
+      // (p. ej. una llamada en el iPad), el WAV tiene un hueco de ese tamaño y lo de detrás va adelantado.
+      audio_retraso_ms: state.rec?.worklet?.startCtx && state.ctx
+        ? Math.round((localNow() - state.rec.startLocal) - (state.ctx.currentTime - state.rec.worklet.startCtx) * 1000) : undefined,
+      otro_graba: state.remoteStatus ? !!state.remoteStatus.recording : undefined,
     };
   }
 
@@ -619,15 +689,16 @@
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, from: state.me.id }),
     });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Error');
+    if (!r.ok) throw Object.assign(new Error(j.error || 'Error'), { status: r.status });
   }
 
   /**
-   * Empieza a grabar. Con `tarde` (retomar una grabación tras la caída de la página) se graba ya mismo, sin cuenta atrás,
-   * sin pitido ni destello (sonarían en mitad de la conversación) y como un tramo nuevo de la misma sesión.
+   * Empieza a grabar. Con `tarde` (retomar tras la caída de la página, o unirse a una grabación que ya estaba en
+   * marcha) se graba ya mismo, sin cuenta atrás, sin pitido ni destello (sonarían en mitad de la conversación) y
+   * como un tramo nuevo de la misma sesión. `retomada` dice que viene de una caída de la página.
    * La sincronía con el resto sigue saliendo de la hora de inicio de cada pista y de la grabación de la llamada.
    */
-  async function startRecording(sessionServidor, { tarde = false } = {}) {
+  async function startRecording(sessionServidor, { tarde = false, retomada = false } = {}) {
     if (state.rec) return;
     // Se libera el espacio de grabaciones anteriores ya subidas.
     for (const u of state.uploaders.filter((x) => x.finished)) await u.deleteLocal().catch(() => {});
@@ -641,7 +712,7 @@
     const vs = state.localStream.getVideoTracks()[0].getSettings();
     const base = {
       room: state.room, session: session.id, participant: state.me.id, name: state.me.name, device: state.me.device,
-      ...(tarde ? { retomada: true } : {}),
+      ...(retomada ? { retomada: true } : tarde ? { tarde: true } : {}),
     };
     const rec = { session, startLocal, recorders: [], worklet: null, canvasTimer: null, stopping: false, tarde };
     state.rec = rec;
@@ -649,7 +720,7 @@
     const marca = () => marcarRecuperacion({ grabando: true, sala: state.room, nombre: state.me.name, sesion: session.id });
     marca();
     rec.marcaTimer = setInterval(marca, 5000);
-    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate, retomada: tarde });
+    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate, tarde, retomada });
     requestWakeLock();
     setRecordingUi('armed');
 
@@ -698,7 +769,11 @@
     if (wait < 0 && !tarde) toast('La orden de grabar llegó tarde; se sincronizará con el pitido.', 'warn');
     if (!tarde) countdown(startLocal);
     setTimeout(() => {
-      for (const r of rec.recorders) { r.startedAtServer = serverNow(); r.recorder.start(1000); }
+      for (const r of rec.recorders) {
+        r.startedAtServer = serverNow();
+        r.recorder.start(1000);
+        r.uploader.anotarInicio(r.startedAtServer);   // queda en el servidor aunque esta página muera
+      }
       setRecordingUi('recording');
       timerLoop();
     }, Math.max(0, wait));
@@ -747,6 +822,7 @@
     if (msg.type === 'started') {
       // Mismo dominio de reloj que el pitido: el inicio exacto respecto a la hora programada.
       pcm.startedAtServer = pcm.session.startAt + (msg.time - pcm.startCtx) * 1000;
+      pcm.uploader.anotarInicio(pcm.startedAtServer);
     } else if (msg.type === 'data') {
       pcm.parts.push(msg.samples);
       pcm.samples += msg.samples.length;
@@ -862,8 +938,9 @@
 
   function timerLoop() {
     const rec = state.rec;
-    if (!rec) { $('#timer').textContent = '00:00:00'; return; }
+    if (!rec) { $('#timer').textContent = '00:00:00'; renderRemoteStatus(); return; }
     $('#timer').textContent = fmtTime(localNow() - rec.startLocal);
+    renderRemoteStatus();
     setTimeout(timerLoop, 250);
   }
 
@@ -935,8 +1012,24 @@
   }
 
   function renderRemoteStatus() {
-    const box = $('#remoteUploads');
     const st = state.remoteStatus;
+    // Si la otra persona graba o no, bien visible sobre su imagen: si se perdió la orden de grabar, se ve en
+    // segundos (y su página se corrige sola), no al acabar el episodio.
+    const indicador = Llamada.estadoDelOtro({
+      hayOtro: !!state.remote, yoGrabo: !!state.rec, otroGraba: st ? st.recording : undefined,
+      msGrabando: state.rec ? localNow() - state.rec.startLocal : 0,
+    });
+    const rec = $('#remoteRec');
+    rec.hidden = !indicador;
+    rec.className = `rec-otro ${indicador || ''}`;
+    rec.textContent = indicador === 'graba' ? '● REC' : '⚠ NO ESTÁ GRABANDO';
+    if (indicador === 'no-graba' && !renderRemoteStatus.avisado) {
+      renderRemoteStatus.avisado = true;
+      Registro.anotar('otro-no-graba', { nombre: state.remote?.name });
+    }
+    if (indicador !== 'no-graba') renderRemoteStatus.avisado = false;
+
+    const box = $('#remoteUploads');
     if (!st || !st.uploads?.length) { box.textContent = ''; return; }
     const pending = st.uploads.filter((u) => !u.finished);
     box.textContent = pending.length
@@ -951,7 +1044,11 @@
 
   // ------------------------------------------------------------------ subidas pendientes de otra vez
   async function checkStoredUploads() {
-    const stored = (await TrackUploader.listStored().catch(() => [])).filter((u) => !u.finished);
+    const todas = await TrackUploader.listStored().catch(() => []);
+    // Lo que el servidor ya confirmó entero se borra del dispositivo. Antes se quedaba para siempre: unos
+    // 10 GB por episodio de 90 min en el disco del PC (y en el iPad, con el enlace fijo).
+    for (const u of todas.filter((x) => x.finished)) await u.deleteLocal().catch(() => {});
+    const stored = todas.filter((u) => !u.finished);
     if (!stored.length) return;
     const box = $('#pending');
     box.hidden = false;
@@ -999,7 +1096,17 @@
         } else if (mode === 'recording') {
           if (pending !== 'stop') { armConfirm('stop', '¿Detener para los dos? Pulsa otra vez'); return; }
           pending = null; btn.classList.remove('confirm');
-          await requestRecord('stop');
+          try {
+            await requestRecord('stop');
+          } catch (err) {
+            // El servidor no tiene esta grabación en marcha (se reinició, o ya se paró): se para aquí igualmente,
+            // en vez de dejar esta página grabando sin poder detenerla.
+            if (err.status !== 409 || !state.rec) throw err;
+            if (state.rec.stopping) return;   // la otra persona la paró a la vez: ya se está parando
+            Registro.anotar('parada-local', { sesion: state.rec.session.id, motivo: err.message });
+            stopRecording({ ...state.rec.session, stopAt: serverNow(), endBeepAt: null });
+            toast('El servidor no tenía esta grabación en marcha (¿se reinició?): se para en esta página. La otra persona debe pulsar Detener en la suya.', 'warn');
+          }
         }
       } catch (err) { toast(err.message, 'error'); }
     });
