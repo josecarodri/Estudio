@@ -120,3 +120,37 @@ test('marcas en vivo: el botón ✂ dice si hay un tramo abierto y cuánto lleva
   assert.strictEqual(L.textoBotonCorte({ inicio: 10_000, nombre: 'JC' }, 75_500), '✂ Cerrar corte 1:05');
   assert.strictEqual(L.textoBotonCorte({ inicio: 10_000, nombre: 'JC' }, 9_000), '✂ Cerrar corte 0:00', 'un reloj algo adelantado no da negativos');
 });
+
+/*
+ * 20 s de nivel del micro, uno cada 100 ms: `voz` dBFS mientras se habla (con su vaivén de sílabas) y `fondo`
+ * en las pausas; habla los `habla` primeros segundos.
+ */
+function nivel({ voz, fondo, habla = 20, pico = 6 }) {
+  return Array.from({ length: 200 }, (_, i) => {
+    const hablando = i < habla * 10 && i % 4 !== 3;           // cada cuatro tramos, una pausa entre palabras
+    const rms = hablando ? voz + ((i * 7) % 9) - 4 : fondo;   // ±4 dB de una sílaba a otra
+    return { rms, pico: Math.min(0, rms + pico) };
+  });
+}
+
+test('micro: la voz baja, la buena y la que satura; sin voz bastante no se dice nada', () => {
+  assert.deepStrictEqual(L.nivelDelMicro(nivel({ voz: -42, fondo: -68 })), { estado: 'bajo', vozDb: -38 });
+  assert.strictEqual(L.nivelDelMicro(nivel({ voz: -22, fondo: -65 })).estado, 'bien');
+  assert.strictEqual(L.nivelDelMicro(nivel({ voz: -10, fondo: -60, pico: 12 })).estado, 'satura');
+  // Escuchando al otro (2 s de voz en 20 s) o en silencio: aún no se sabe.
+  assert.strictEqual(L.nivelDelMicro(nivel({ voz: -42, fondo: -68, habla: 2 })).estado, null);
+  assert.strictEqual(L.nivelDelMicro(nivel({ voz: -70, fondo: -70 })).estado, null);
+  assert.strictEqual(L.nivelDelMicro([]).estado, null);
+});
+
+test('micro: con ruido de fondo alto (un ventilador) cuenta la voz, no el ruido', () => {
+  assert.strictEqual(L.nivelDelMicro(nivel({ voz: -20, fondo: -38 })).estado, 'bien');
+  assert.strictEqual(L.nivelDelMicro(nivel({ voz: -40, fondo: -58 })).estado, 'bajo');
+});
+
+test('micro: el aviso propio dice qué hacer; el del otro, de quién es', () => {
+  assert.strictEqual(L.avisoDeMicro('bajo'), '🎙 Tu micro llega bajo: acércate o súbele el volumen');
+  assert.strictEqual(L.avisoDeMicro('satura', { nombre: 'DJ' }), '🎙 El micro de DJ satura');
+  assert.strictEqual(L.avisoDeMicro('bien'), '');
+  assert.strictEqual(L.avisoDeMicro(null, { nombre: 'DJ' }), '');
+});

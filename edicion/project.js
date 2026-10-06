@@ -461,7 +461,7 @@ function emitColor(xml, item, indent) {
 
 /*
  * Reencuadre y opacidad. qtblend coloca el fotograma en un rectángulo, que es lo que
- * usa Kdenlive para "Posición y zoom": con zoom 1.9 en un proyecto vertical se recorta
+ * usa Kdenlive para "Posición y zoom": con zoom 3,16 ((16/9)², medido con melt) en un proyecto vertical se recorta
  * un 16:9 a 9:16 sin deformarlo.
  */
 function emitTransform(xml, item, size, indent) {

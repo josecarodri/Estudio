@@ -290,13 +290,16 @@ de un vistazo en la timeline por qué está cortado ahí.
 | `node cli.js analizar <carpeta>` | propuesta: inicio/fin de voz, silencios y marcas de charla técnica (no propone contenido) |
 | `node cli.js aprobar <carpeta> 1.1 2.1` | pasa propuestas al `episodio.json` del episodio, con los cortes ajustados al silencio |
 | `node cli.js verificar <carpeta>` | comprueba el vídeo final: duración, −14 LUFS, sin pitidos, principio y final |
-| `node cli.js estado <carpeta>` | en qué fase va el proceso, en una línea |
+| `node cli.js estado <carpeta>` | en qué fase va el proceso, en una línea, y lo que tardó cada fase la última vez |
 | `node cli.js transcribir <carpeta>` | transcripción local con Whisper (texto con tiempos por parte) |
 | `node cli.js revision <carpeta> [--silencios]` | vídeo corto (480p) para revisar el montaje desde el móvil: cada empalme numerado, principio y final |
+| `node cli.js youtube <carpeta>` | subtítulos `.srt`, transcripción e índice del vídeo final, y la descripción con capítulos (`entrega/youtube.md`) |
+| `node cli.js shorts <carpeta> [--antes 40] [--despues 8]` | shorts verticales con subtítulos, de los ★ marcados al grabar (o de `shorts`), en `entrega/shorts/` |
+| `node cli.js limpiar <carpeta> [--estudio] [--confirmar]` | libera disco con el episodio hecho (sin `--confirmar` solo enseña qué borraría) |
 
 Opciones: `--out <archivo>`, `--doc-version 1.1|1.04`,
 `--compositing qtblend|frei0r.cairoblend|composite`, `--root <carpeta>`,
-`--timeout <segundos>` (en `render`), y en `selftest` además `--dir <carpeta>`,
+`--timeout <segundos>` y `--hilos <n>` (en `render`: fotogramas a la vez, 2 por omisión), y en `selftest` además `--dir <carpeta>`,
 `--media a.mp4,b.mp4` y `--render`.
 
 ## El episodio semanal (`episodio`)
@@ -311,11 +314,14 @@ repo); aquí va cómo funciona por dentro.
 **Configuración en capas.** Los valores por defecto (`CONFIG_POR_DEFECTO` en `episodio.js`), encima
 `<raiz>/episodio.json` con lo del equipo (retardo de audio por persona, niveles, silencios, color, codificador) y
 encima `<raiz>/AAAA-MM-DD/episodio.json` con lo de ese episodio. Las claves de episodio (`cortes`, `partes`,
-`limpiezas`, `mantenerPlano`, `insertar`, `alFinal`, y `desde`/`hasta` que no sean `auto`) puestas en la raíz no se
+`limpiezas`, `mantenerPlano`, `insertar`, `alFinal`, `titulo`, `resumen`, `capitulos`, `shorts`, y `desde`/`hasta` que no sean `auto`) puestas en la raíz no se
 aplican: se avisa, y `config <carpeta> --tomar-de-raiz` las pasa a su episodio. Un `episodio.json` de episodio:
 
 ```jsonc
 {
+  "titulo": "…", "resumen": "…",                       // para YouTube (ver más abajo)
+  "capitulos": [{ "titulo": "Intro" }, { "titulo": "El viaje", "frase": "bueno, cuéntame del viaje" }],
+  "shorts": [{ "desde": "12:30", "hasta": "13:20" }],  // minutos del vídeo final; sin esto, uno por ★
   "cortes": [["2:02", "2:34"]],                        // para todas las partes
   "partes": {
     "1": {
@@ -367,6 +373,46 @@ el final del episodio y las uniones de partes; y `montaje/revision.md` con la li
 vídeo final. Los silencios recortados solo salen con `--silencios`. Cada trozo se guarda con una huella: si no
 cambia nada, la revisión sale en segundos, y si cambia un corte solo se rehace lo que cambió.
 
+**Cámara congelada o en negro.** Si una webcam se cuelga (imagen quieta, o un hueco sin imagen en el archivo), se
+tapa, se apaga o deja de dar imagen antes de que acabe el archivo, `camaras.js` lo encuentra con ffmpeg
+(`freezedetect` y `blackdetect` a 5 imágenes por segundo y 160 px de ancho: ≈3 min por hora de vídeo, guardado en
+`montaje/camaras.json` para no repetirlo) y `cortes.cubrirCamaras` pone en esos tramos la cámara del otro, en
+sincronía, antes de sacar lo que se copia (`alFinal`, `insertar`) y de disimular saltos (que ya no la vuelve a
+poner ahí). Al montar lo dice («⚠ 0:30 → 0:40 cámara de dj congelada (10 s): se ve a jc») y deja una guía naranja
+«⚠» que sale en la revisión. La tolerancia es muy baja: una imagen repetida tal cual da diferencia 0, y alguien
+quieto con el ruido de su cámara no (a la calidad del Estudio, 10 Mb/s en 1080p). Ajustes en `camaras`
+(`congelada` 4 s, `negro` 2 s, `tolerancia`); `--sin-camaras` lo salta.
+
+**Plano doble.** Cuando la conversación va y viene deprisa (`planoDoble.planos`, 3, planos seguidos de menos de
+`corto`, 2,5 s, y al menos `minimo`, 3 s), tanto cambio de cámara marea: en ese tramo se ve a los dos a la vez, cada
+uno en su mitad (zoom 0,5; la izquierda en V1 y la derecha en V2; `izquierda`: `jc`), con una guía azul «◫». Se
+hace tras disimular los saltos, en la receta sin cortar, y no usa una cámara congelada ni toca los `mantenerPlano`.
+La revisión enseña los dos primeros. `"planoDoble": { "activo": false }` lo quita.
+
+**Rótulos con el nombre.** Con `"rotulos": { "nombres": { "jc": "JC", "dj": "DJ" } }` (lo que eligieron ellos, ya por
+defecto; se cambia en la configuración del equipo), la primera vez que se ve a cada uno solo (desde el segundo `desde`, 3, en un plano en que quepa entero)
+sale su nombre abajo a la izquierda `segundos` (4), con fundido. Cada rótulo es un vídeo con transparencia
+(QuickTime Animation, `montaje/rotulos/`) hecho con ffmpeg y va en la pista V3: en Kdenlive se mueve o se quita como
+cualquier clip. Sin nombres no se pone ninguno.
+
+**YouTube.** `youtube <carpeta>` traduce la transcripción de cada parte (reloj de su llamada) al vídeo final con el
+«mapa del montaje» (`youtube.js`: compara dónde empieza cada micro en la receta sin cortar con dónde quedó cada
+trozo en la final; lo cortado no sale y lo repetido sale dos veces), sin volver a transcribir. Deja en `entrega/`
+los subtítulos (`<episodio>.srt`, frases de 2 líneas de 42 caracteres), `transcripcion.txt`, `indice.md` (cada 2
+min: cómo empieza y sus palabras más repetidas, para elegir capítulos), `<episodio>.descripcion.txt` y
+`youtube.md` (título, descripción, etiquetas, archivos y lo que falta). Los capítulos van por frase (o `"en":
+"12:34"`): el primero siempre en 0:00, y avisa si hay menos de 3 o alguno de menos de 10 s (YouTube no los
+mostraría). El pie de la descripción y las etiquetas son del equipo: `"youtube": { "pie": "…", "etiquetas": [] }`.
+`episodio` lo hace solo al final si ya están las transcripciones.
+
+**Shorts.** `shorts <carpeta>` hace uno vertical (1080x1920) por cada ★ marcada al grabar, con los 40 s de antes
+de la marca y 8 de después, ajustados a frases (o los de `shorts` en el `episodio.json` del episodio:
+`{ "desde", "hasta" }` en minutos del vídeo final, o `{ "frase", "segundos" }`), como mucho 60 s. Sale del montaje
+final, con lo ya cortado y disimulado: cada cámara recortada por el centro para llenar el alto (zoom
+alto·(16/9)/ancho = 3,16, medido con melt) y el plano doble con una persona arriba y otra abajo (sin rótulos).
+Encima, con ffmpeg, los subtítulos grabados (ASS: letra gruesa blanca con borde, a dos tercios del alto, encima de
+los botones de YouTube) y el volumen a −14 LUFS. Quedan en `entrega/shorts/` con su lista `shorts.md`.
+
 **Lo que no se repite.** La huella de cada parte (`parte-N/huella.txt`) evita repetir el análisis de cámaras si no
 cambiaron los archivos ni lo que afecta al reparto; cambiar cortes tarda segundos. `--rehacer` lo fuerza,
 `--recortar` lo evita siempre, `--reanudar` parte del montaje ya unido y salta al render.
@@ -380,15 +426,25 @@ pasadas (pico −1 dBTP), color de acabado, H.264 crf 18 con el índice al princ
 `medium`) o `"nvenc"` (tarjeta gráfica; si falla, se repite solo con x264). El color de acabado y la limpieza de
 sonido no están en el `.kdenlive`: en Kdenlive se ve el montaje, no el aspecto final.
 
-**PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision` y `render` impiden que
+**PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision`, `render`, `youtube` y `shorts` impiden que
 el PC se duerma mientras trabajan (en Windows, con un PowerShell aparte que se cierra solo al acabar) y, si tardaron
 más de `avisos.minimoSegundos` (60), avisan al terminar o al fallar: notificación de Windows y, con
 `"avisos": { "ntfy": "<tema>" }` en la configuración del equipo, también en el móvil con la app gratuita ntfy
 suscrita a ese tema (o la dirección de un servidor ntfy propio). El tema hace de contraseña: mejor uno difícil de
 adivinar.
 
+**Tiempos y disco.** Cada fase apunta en `montaje/estado.json` lo que tardó, y `estado` enseña los tiempos de la
+última vez (p. ej. «montando-parte-1 3 min · renderizando 42 min · acabado 11 min»). El render hace 2 fotogramas a
+la vez (`"render": { "hilos": 2 }`, el `real_time=-2` de melt): un 28 % más rápido en las pruebas y el mismo
+resultado imagen a imagen; con 1, de uno en uno. Un preset de x264 más rápido para el render en bruto no
+compensa (10-15 % menos y el doble o el triple de tamaño). Con el episodio hecho, `limpiar <carpeta>` dice qué se
+puede borrar (render en bruto, revisión, intermedios de los shorts, micros limpiados, llamada unida, temporales;
+con `--estudio`, las grabaciones del Estudio ya copiadas en `originales/` con el mismo tamaño) y cuánto libera, y
+lo borra con `--confirmar`. Nunca toca `originales/`, `entrega/` ni los proyectos de Kdenlive, y pide que el
+episodio esté listo (o `--forzar`).
+
 Opciones de `episodio`: `--solo-montaje`, `--reanudar`, `--recortar`, `--rehacer`, `--sin-silencios`,
-`--sin-acabado`, `--sin-verificar`, `--usar-proyecto`, `--descartar-cambios`; `episodio nuevo [<raiz>] --fecha AAAA-MM-DD`.
+`--sin-acabado`, `--sin-verificar`, `--sin-camaras`, `--usar-proyecto`, `--descartar-cambios`; `episodio nuevo [<raiz>] --fecha AAAA-MM-DD`.
 De `importar`: `--copiar`, `--mover`, `--sesiones <id>,<id>`, `--horas <n>` (36), `--estudio <carpeta>`,
 `--descargas [<carpeta>]`.
 
@@ -424,7 +480,7 @@ Los tiempos aceptan frames (`120`), `"HH:MM:SS:FF"`, `"MM:SS"` o segundos (`"2.5
       "fadeOut": "1s",
       "dissolve": "0.4s",    // encadenado con el corte anterior de esta pista
       "speed": 2,            // 2 = el doble de rápido, 0.5 = a la mitad
-      "zoom": 1.9,           // reencuadre: 1.9 recorta un 16:9 a 9:16
+      "zoom": 3.16,          // reencuadre: en un proyecto 9:16, 3,16 llena el alto con un 16:9
       "pan": 0, "tilt": 40,  // desplazamiento en píxeles
       "opacity": 100
     }
@@ -436,7 +492,7 @@ Los tiempos aceptan frames (`120`), `"HH:MM:SS:FF"`, `"MM:SS"` o segundos (`"2.5
 }
 ```
 
-`transform: [{ "index": 1, "zoom": 1.9 }]` también vale: se aplica al corte número 1 de
+`transform: [{ "index": 1, "zoom": 3.16 }]` también vale: se aplica al corte número 1 de
 `edit` (lo que diga el propio corte manda).
 
 Hay tres ejemplos en `recipes/`: `ejemplo-simple.json`, `ejemplo-vertical.json`
@@ -480,6 +536,16 @@ versión (usaban parámetros que MLT ignora en silencio) y solo se vio al medir.
   del sonido en el vídeo ya renderizado: **+0,1 ms**. Y `ajustar-audio` mueve justo lo
   que se le pide: pedir 33 ms da 33,4 medidos, y 66 da 66,6.
 
+- El plano doble, los rótulos y los shorts, renderizados con melt y mirados imagen a imagen: cada persona en su
+  mitad (o arriba y abajo en vertical) y en sincronía, el rótulo con su transparencia sobre el plano de esa
+  persona, y el vertical con los subtítulos grabados. Así se vio que el reencuadre para llenar un vertical es
+  zoom 3,16 y no 1,9, como se había escrito sin medirlo.
+- La cámara congelada: en una sesión fabricada con la cámara de dj congelada 10 s, se encuentra justo ese tramo y en
+  el render se ve a jc en sincronía y luego otra vez a dj, ya moviéndose. Un hueco sin imágenes en el archivo (lo
+  que deja una cámara colgada) se detecta exacto; una imagen quieta con ruido de cámara, a la calidad del Estudio,
+  no se toma por congelada.
+- Renderizar 2 fotogramas a la vez da el mismo vídeo imagen a imagen (`PSNR average:inf`).
+
 Buscar los fallos midiendo salió a cuenta: además de los fundidos de audio, así
 aparecieron un desajuste de un frame al acotar el audio al final del archivo, y un suelo
 de ruido que se metía dentro de la voz cuando una persona habla casi todo el rato (un
@@ -498,15 +564,18 @@ cuadra, dímelo y lo ajusto.
 
 ## Limitaciones conocidas
 
-- **Títulos.** Todavía no. En Kdenlive un título es un productor con su propio XML
-  dentro; es posible, pero no está hecho.
+- **Títulos de Kdenlive.** No se usan: los rótulos con el nombre son vídeos con transparencia hechos con ffmpeg
+  (pista V3). Para cambiar un nombre se cambia en la configuración y se vuelve a montar.
 - **Efectos en el proyecto.** En el `.kdenlive` no hay más que reencuadre, opacidad,
   fundidos, ganancia de audio y el emparejado de color entre cámaras. El color de
   acabado y la limpieza de sonido del episodio los aplica `episodio` con ffmpeg después
   del render: en Kdenlive se ve el montaje, no el aspecto final.
 - **Un encadenado por punto de corte**, que es también el límite de Kdenlive.
-- **Títulos en el multicámara.** No pone rótulos con el nombre de quien habla; las
-  guías de la timeline sí dicen quién es.
+- **Rótulos en `multicam`.** Solo los pone `episodio` (con `rotulos.nombres`); en `multicam` las guías de la
+  timeline dicen quién es.
+- **Shorts recortados por el centro.** Si alguien se sienta muy a un lado de su cámara, el vertical puede cortarle.
+- **Cámara congelada con muy poca calidad.** Si el compresor deja idénticas las imágenes de alguien muy quieto
+  (pasa con mucha menos calidad que la del Estudio), no se distingue de una cámara colgada: se vería al otro.
 - **El sonido, en `multicam`, se iguala pero no se limpia.** La limpieza va en
   `episodio`: filtro de graves y compresor suaves en el acabado, y RNNoise + puerta de
   ruido en los tramos que se pidan (`limpiezas`). Sin probar: `quitarRuido` (todo el
@@ -524,10 +593,10 @@ cuadra, dímelo y lo ajusto.
 - **Sincronía por envolvente.** Necesita que los audios compartan contenido reconocible
   con la referencia. Con música de fondo constante o un tono plano no hay forma: ahí la
   confianza baja y lo dice, para que lo revises en la timeline.
-- **`melt` sin módulo Qt.** En algunas instalaciones mínimas de Linux, MLT no carga
-  `qtblend`, y entonces el vídeo que saca `render` va sin reencuadre ni composición
-  entre pistas. El `.kdenlive` sigue siendo correcto, porque Kdenlive sí trae ese
-  módulo. `doctor` lo detecta y `render` lo dice en lugar de dar el preview por bueno.
+- **`melt` sin pantalla en Linux.** El módulo Qt de MLT (el de `qtblend`: reencuadre, plano doble, rótulos y
+  composición entre pistas) pide una pantalla («requires a X11 environment»). Si está `xvfb-run`, `render`,
+  `revision` y `shorts` lo usan solos (`media.comandoMelt`); si no, el vídeo sale sin reencuadre ni composición. El
+  `.kdenlive` sigue siendo correcto, y en Windows no pasa.
 
 ## Pruebas
 
@@ -554,15 +623,21 @@ recipe.js      validación de recetas (todos los fallos a la vez)
 media.js       lee los clips con ffprobe
 episodio.js    carpetas, configuración en capas, partes, importar del Estudio, limpieza y acabado
 llamadas.js    une la llamada partida (tramos de una página que se cayó y se retomó)
-cortes.js      quita, inserta y une tramos en la receta (cortes, plano fijo, partes)
+cortes.js      quita, inserta y une tramos en la receta (cortes, plano fijo, partes, saltos, plano doble)
 auto.js        analizar, aprobar, verificar, estado; límites por voz, cortes por texto, huella
 analizar.js    medidas rápidas de una parte: inicio y fin de voz, charla técnica, citas → tiempos
 transcribir.js transcripción local con whisper.cpp
 revision.js    vídeo de revisión para el móvil (trozos alrededor de cada empalme)
 avisos.js      PC despierto durante lo largo y aviso al terminar (Windows y ntfy)
+camaras.js     cámara congelada, en negro o sin imagen (la cubre cortes.cubrirCamaras)
+rotulos.js     rótulos con el nombre (vídeos con transparencia en V3)
+youtube.js     mapa del montaje, subtítulos, capítulos, índice y descripción
+shorts.js      shorts verticales con subtítulos grabados
+limpieza.js    qué se puede borrar con el episodio hecho
 recipes/       ejemplos
 tests/sesion-falsa.js   genera una sesión de prueba con desfases y turnos conocidos (y caídas)
 ```
 
 Las pruebas están en `tests/` de esta carpeta: `kdenlive.test.js`, `auto.test.js`,
-`cortes.test.js`, `episodio.test.js`, `llamadas.test.js`, `receta.test.js`, `revision.test.js` y `avisos.test.js`.
+`cortes.test.js`, `episodio.test.js`, `llamadas.test.js`, `receta.test.js`, `revision.test.js`, `avisos.test.js`,
+`youtube.test.js`, `camaras.test.js`, `rotulos.test.js`, `shorts.test.js` y `limpieza.test.js`.

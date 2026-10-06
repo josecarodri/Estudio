@@ -214,3 +214,38 @@ test('guías de los cortes: una por empalme, con su motivo y lo que se quita; se
   const cortada = C.aplicarCortes({ ...r, guides: guias }, [{ desde: seg(100), hasta: seg(130) }, { desde: seg(600), hasta: seg(800) }]);
   assert.deepStrictEqual(cortada.guides.map((g) => g.at), [100, 570], 'cada guía queda en su empalme');
 });
+
+// ------------------------------------------------------------------------------------ plano doble
+
+test('plano doble: en un intercambio rápido se ve a los dos, cada uno en su mitad y en sincronía', () => {
+  // jc 2 s, dj 1,6 s, jc 2,4 s: tres planos cortos seguidos (6 s).
+  const planos = [['cam_dj', 0, 250], ['cam_jc', 250, 300], ['cam_dj', 300, 340], ['cam_jc', 340, 400], ['cam_dj', 400, 1000]];
+  const r = C.planoDoble(conversacion(planos), { izquierda: 'jc' });
+  assert.deepStrictEqual(r.dobles, [{ desde: 250, hasta: 400, izquierda: 'jc', derecha: 'dj' }]);
+  const v1 = r.receta.edit.filter((e) => !e.audioTrack && !e.track).sort((a, b) => a.at - b.at)
+    .map((e) => [e.clip, e.at, e.at + e.duration, e.in - e.at, e.zoom, e.pan]);
+  assert.deepStrictEqual(v1, [
+    ['cam_dj', 0, 250, 100, undefined, undefined],
+    ['cam_jc', 250, 400, 50, 0.5, -480],                     // jc a la izquierda
+    ['cam_dj', 400, 1000, 100, undefined, undefined],
+  ]);
+  const v2 = r.receta.edit.filter((e) => e.track === 2);
+  assert.deepStrictEqual(v2.map((e) => [e.clip, e.at, e.duration, e.in - e.at, e.zoom, e.pan]), [['cam_dj', 250, 150, 100, 0.5, 480]]);
+  assert.strictEqual(r.receta.tracks.video, 2);
+  // Sin decir quién va a la izquierda, por orden alfabético; y al cortar, las dos mitades se cortan igual.
+  assert.deepStrictEqual(C.planoDoble(conversacion(planos)).dobles[0].izquierda, 'dj');
+  const cortada = C.aplicarCortes(r.receta, [{ desde: 300 / 25, hasta: 340 / 25 }]);
+  assert.deepStrictEqual(cortada.edit.filter((e) => e.zoom === 0.5).map((e) => [e.clip, e.track || 1, e.at, e.duration]).sort(),
+    [['cam_dj', 2, 250, 50], ['cam_dj', 2, 300, 60], ['cam_jc', 1, 250, 50], ['cam_jc', 1, 300, 60]]);
+});
+
+test('plano doble: no con solo dos planos cortos, ni en un plano fijado a mano, ni con una cámara congelada', () => {
+  const planos = [['cam_dj', 0, 250], ['cam_jc', 250, 300], ['cam_dj', 300, 340], ['cam_jc', 340, 400], ['cam_dj', 400, 1000]];
+  const dos = [['cam_dj', 0, 250], ['cam_jc', 250, 300], ['cam_dj', 300, 1000]];
+  assert.deepStrictEqual(C.planoDoble(conversacion(dos)).dobles, []);
+  assert.deepStrictEqual(C.planoDoble(conversacion(planos), { fijos: [[12, 13]] }).dobles, []);
+  assert.deepStrictEqual(C.planoDoble(conversacion(planos), { vetos: { cam_dj: [[380, 420]] } }).dobles, []);
+  // Lo de encima (la otra mitad) no cuenta como plano para disimular saltos ni para saber quién se ve al final.
+  const r = C.planoDoble(conversacion([['cam_dj', 0, 250], ['cam_jc', 250, 300], ['cam_dj', 300, 340], ['cam_jc', 340, 400]]), { izquierda: 'jc' });
+  assert.strictEqual(C.personaAlFinal(r.receta), 'jc');
+});

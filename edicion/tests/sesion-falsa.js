@@ -161,8 +161,9 @@ function generar(dir, options) {
   rutas['dj_camara.mp4'] = path.join(dir, 'dj_camara.mp4');
   conVideo(completos.dj_cam, rutas['dj_camara.mp4'], desfases['dj_camara.mp4'], 'testsrc');
 
+  // Una imagen que se mueve, como la de una cámara de verdad: una fija se tomaría por cámara congelada.
   rutas['jc_camara (1).mp4'] = path.join(dir, 'jc_camara (1).mp4');
-  conVideo(completos.jc_cam, rutas['jc_camara (1).mp4'], desfases['jc_camara (1).mp4'], 'smptebars');
+  conVideo(completos.jc_cam, rutas['jc_camara (1).mp4'], desfases['jc_camara (1).mp4'], 'testsrc2');
 
   rutas['jc_llamada (1).mp4'] = path.join(dir, 'jc_llamada (1).mp4');
   conVideo(completos.llamada, rutas['jc_llamada (1).mp4'], desfases['jc_llamada (1).mp4'], 'rgbtestsrc');

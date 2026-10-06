@@ -129,14 +129,45 @@ function textoEntre(segs, desde, hasta, max = 220) {
 }
 
 // ------------------------------------------------------------------ estado
+// Fases que dicen «ya está» (no son trabajo): no se les cuenta el tiempo hasta la siguiente orden.
+const FASES_FINALES = new Set(['listo', 'listo-con-avisos', 'error', 'montaje-listo', 'render-listo', 'revision-lista', 'shorts-listos']);
+
+/*
+ * Apunta en montaje/estado.json la fase en curso y, en `historial`, lo que tardó la anterior (si era de
+ * este mismo proceso): así `estado` dice en qué se va el tiempo (p. ej. renderizando 42 min).
+ */
 function marcarFase(r, fase, detalle) {
   try {
     fs.mkdirSync(r.montaje, { recursive: true });
     const f = path.join(r.montaje, 'estado.json');
     const previo = existe(f) ? leerJson(f) : {};
-    const ahora = new Date().toISOString();
-    escribirJson(f, { ...previo, fase, detalle: detalle || '', inicioFase: ahora, actualizado: ahora, pid: process.pid, inicio: previo.inicio || ahora });
+    const ahora = new Date();
+    const historial = Array.isArray(previo.historial) ? previo.historial : [];
+    const mismo = previo.pid === process.pid;
+    // Cada orden (cada proceso) es una «vez»: lo que tarda cada fase se apunta con ella.
+    const vez = mismo && previo.vez ? previo.vez : ahora.toISOString();
+    if (previo.fase && mismo && previo.inicioFase && !FASES_FINALES.has(previo.fase)) {
+      historial.push({ fase: previo.fase, segundos: Math.round((ahora - new Date(previo.inicioFase)) / 1000), vez });
+    }
+    escribirJson(f, {
+      ...previo, fase, detalle: detalle || '', inicioFase: ahora.toISOString(), actualizado: ahora.toISOString(), pid: process.pid, vez,
+      inicio: previo.inicio || ahora.toISOString(), historial: historial.slice(-60),
+    });
   } catch { /* el estado es una ayuda, no debe romper nada */ }
+}
+
+const legible = (s) => (s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+
+/* Lo que tardó cada fase la última vez que se trabajó en el episodio (la última orden). */
+function tiemposDeLaUltimaVez(historial) {
+  const h = Array.isArray(historial) ? historial : [];
+  if (!h.length) return '';
+  const { vez } = h[h.length - 1];
+  let i = h.length;
+  while (i > 0 && h[i - 1].vez === vez) i -= 1;
+  const ultimas = h.slice(i);
+  const total = ultimas.reduce((n, x) => n + x.segundos, 0);
+  return `${ultimas.map((x) => `${x.fase} ${legible(x.segundos)}`).join(' · ')}${ultimas.length > 1 ? ` (total ${legible(total)})` : ''}`;
 }
 
 function estado(carpeta) {
@@ -151,8 +182,13 @@ function estado(carpeta) {
   for (const [nombre, ruta] of [['bruto', path.join(r.montaje, 'episodio-bruto.mp4')], ['final', path.join(r.entrega, `${path.basename(r.base)}.mp4`)]]) {
     if (existe(ruta)) extra.push(`${nombre} ${(fs.statSync(ruta).size / 1073741824).toFixed(2)} GB`);
   }
-  const marca = vivo || e.fase === 'listo' || e.fase === 'error' ? '' : ' (el proceso ya no está: se interrumpió)';
-  return { fase: e.fase, vivo, minutos: min, texto: `${e.fase}${e.detalle ? ` · ${e.detalle}` : ''} · hace ${min} min${extra.length ? ` · ${extra.join(' · ')}` : ''}${marca}` };
+  const marca = vivo || FASES_FINALES.has(e.fase) ? '' : ' (el proceso ya no está: se interrumpió)';
+  const tiempos = tiemposDeLaUltimaVez(e.historial);
+  return {
+    fase: e.fase, vivo, minutos: min,
+    texto: `${e.fase}${e.detalle ? ` · ${e.detalle}` : ''} · hace ${min} min${extra.length ? ` · ${extra.join(' · ')}` : ''}${marca}`
+      + `${tiempos ? `\ntiempos de la última vez: ${tiempos}` : ''}`,
+  };
 }
 
 // ------------------------------------------------------------------ huella (evita repetir el análisis largo)
@@ -518,6 +554,7 @@ function verificar(carpeta) {
 }
 
 module.exports = {
+  tiemposDeLaUltimaVez,
   marcarFase, estado, huellaDeParte, llamadaDe, resolverLimites, resolverCortesTexto, sueloDeRuido, confirmarSilencios,
   analizar, aprobar, verificar, coincidencia, tiempoASeg, marcasEnVivo, guiasDeMarcas, textoEntre, CORTE_EN_VIVO_MINIMO,
 };

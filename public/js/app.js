@@ -31,6 +31,9 @@
     rec: null,            // grabación en curso
     uploaders: [],
     remoteStatus: null,
+    nivelMicro: [],      // nivel del micro cada 100 ms de los últimos 20 s (para el aviso de micro bajo)
+    micEstado: null,
+    micVozDb: null,
     wakeLock: null,
     recuperando: false,   // se entró para retomar una grabación tras una caída de la página
     corteAbierto: null,   // tramo «✂ cortar» abierto en la sala: { inicio (hora del servidor), nombre }
@@ -234,6 +237,9 @@
     if (a.mic) a.mic.disconnect();
     a.mic = state.ctx.createMediaStreamSource(state.localStream);
     a.mic.connect(a.recBus);
+    // Otro micro: su nivel se mide de cero.
+    state.nivelMicro = [];
+    if (state.micEstado) ponerMicEstado(null, null);
   }
 
   function connectRemoteAudio(stream) {
@@ -249,17 +255,53 @@
   function meterLoop() {
     const buf = new Float32Array(state.audio.analyser.fftSize);
     const bar = $('#meter');
+    // Además del medidor, el nivel de cada 100 ms (últimos 20 s): con él se avisa si el micro llega bajo o satura.
+    let acum = { sq: 0, n: 0, pico: 0, desde: performance.now() };
+    let revisado = 0;
     const tick = () => {
       state.audio.analyser.getFloatTimeDomainData(buf);
       let peak = 0;
-      for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i]));
+      let sq = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = Math.abs(buf[i]);
+        if (v > peak) peak = v;
+        sq += v * v;
+      }
       const db = 20 * Math.log10(peak || 1e-6);
       const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
       bar.style.width = `${pct}%`;
       bar.className = db > -3 ? 'clip' : db > -12 ? 'hot' : '';
+      acum.sq += sq;
+      acum.n += buf.length;
+      acum.pico = Math.max(acum.pico, peak);
+      const ahora = performance.now();
+      if (ahora - acum.desde >= 100) {
+        state.nivelMicro.push({ rms: 10 * Math.log10(acum.sq / acum.n || 1e-12), pico: 20 * Math.log10(acum.pico || 1e-6) });
+        if (state.nivelMicro.length > 200) state.nivelMicro.shift();
+        acum = { sq: 0, n: 0, pico: 0, desde: ahora };
+      }
+      if (ahora - revisado >= 1000) { revisado = ahora; revisarMicro(); }
       requestAnimationFrame(tick);
     };
     tick();
+  }
+
+  /** Aviso si la voz llega baja o satura (en mi imagen, y a la otra persona por el estado). */
+  function revisarMicro() {
+    const pista = state.localStream?.getAudioTracks()[0];
+    if (pista && !pista.enabled) return; // silenciado: no se mide
+    const { estado, vozDb } = Llamada.nivelDelMicro(state.nivelMicro);
+    if (estado === null || estado === state.micEstado) return;
+    ponerMicEstado(estado, vozDb);
+  }
+  function ponerMicEstado(estado, vozDb) {
+    state.micEstado = estado;
+    state.micVozDb = vozDb;
+    if (estado) Registro.anotar('micro', { estado, voz_db: vozDb });
+    const aviso = $('#micAviso');
+    aviso.textContent = Llamada.avisoDeMicro(estado);
+    aviso.hidden = !aviso.textContent;
+    sendStatusSoon();
   }
 
   /** Convierte una hora local (ms) al reloj del AudioContext (s). */
@@ -514,6 +556,8 @@
       audio_retraso_ms: state.rec?.worklet?.startCtx && state.ctx
         ? Math.round((localNow() - state.rec.startLocal) - (state.ctx.currentTime - state.rec.worklet.startCtx) * 1000) : undefined,
       otro_graba: state.remoteStatus ? !!state.remoteStatus.recording : undefined,
+      mic_nivel: state.micEstado || undefined,
+      mic_voz_db: state.micVozDb ?? undefined,
     };
   }
 
@@ -1052,7 +1096,7 @@
     if (!state.room) return;
     fetch(`/api/rooms/${encodeURIComponent(state.room)}/status`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec, uploads: uploadSummary(state.uploaders) } }),
+      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec, uploads: uploadSummary(state.uploaders), mic: state.micEstado } }),
     }).catch(() => {});
   }
 
@@ -1073,6 +1117,11 @@
       Registro.anotar('otro-no-graba', { nombre: state.remote?.name });
     }
     if (indicador !== 'no-graba') renderRemoteStatus.avisado = false;
+
+    // Si el micro de la otra persona llega bajo o satura, también se ve aquí (sobre todo para quien dirige).
+    const mic = $('#remoteMic');
+    mic.textContent = Llamada.avisoDeMicro(st && st.mic, { nombre: state.remote?.name || 'la otra persona' });
+    mic.hidden = !mic.textContent;
 
     const box = $('#remoteUploads');
     if (!st || !st.uploads?.length) { box.textContent = ''; return; }

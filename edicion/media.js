@@ -16,6 +16,21 @@ function hasFfprobe() {
   return !res.error;
 }
 
+/*
+ * Cómo ejecutar melt: [programa, ...argumentos previos]. En Linux sin pantalla (un servidor, las
+ * pruebas) el módulo Qt de MLT no carga («requires a X11 environment») y con él falla qtblend, que es
+ * el reencuadre y la composición de pistas de Kdenlive (plano doble, rótulos, shorts verticales): si
+ * está xvfb-run, melt se ejecuta en una pantalla virtual. En Windows y macOS no hace falta.
+ */
+let conPantallaVirtual = null;
+function comandoMelt(melt) {
+  if (conPantallaVirtual === null) {
+    conPantallaVirtual = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
+      && !spawnSync('xvfb-run', ['--help'], { stdio: 'ignore', timeout: 15000 }).error;
+  }
+  return conPantallaVirtual ? ['xvfb-run', '-a', melt] : [melt];
+}
+
 function parseRate(value) {
   if (!value) return null;
   const m = String(value).match(/^(\d+)\/(\d+)$/);
@@ -138,4 +153,4 @@ function probeRecipe(recipe, timelineFps) {
   return { byId, problems };
 }
 
-module.exports = { hasFfprobe, probe, probeRecipe, parseRate };
+module.exports = { hasFfprobe, probe, probeRecipe, parseRate, comandoMelt };

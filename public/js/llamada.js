@@ -141,9 +141,36 @@
     return `✂ Cerrar corte ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  /**
+   * ¿Llega bien la voz al micro? `tramos`: el nivel de los últimos ~20 s, uno cada 100 ms, en dBFS
+   * ({ rms, pico }). Solo cuenta la voz: lo que está claramente por encima del ruido de fondo. Devuelve
+   * { estado, vozDb }: 'bajo' si lo normal de la voz (su percentil 90) no llega a −32 dBFS (al editar
+   * habría que subirlo mucho, y con él el ruido); 'satura' si recorta (picos a 0 dBFS) varias veces;
+   * 'bien'; o null si aún no hay voz bastante para saberlo (p. ej. mientras habla el otro).
+   */
+  function nivelDelMicro(tramos, opciones) {
+    const o = { bajo: -32, recorte: -0.5, recortes: 3, vozMinima: 30, ...opciones };
+    if (!tramos || !tramos.length) return { estado: null, vozDb: null };
+    if (tramos.filter((t) => t.pico >= o.recorte).length >= o.recortes) return { estado: 'satura', vozDb: null };
+    const niveles = tramos.map((t) => t.rms).sort((a, b) => a - b);
+    const suelo = niveles[Math.floor(niveles.length * 0.1)];
+    const voz = niveles.filter((x) => x > Math.max(-55, suelo + 12));
+    if (voz.length < o.vozMinima) return { estado: null, vozDb: null };
+    const vozDb = Math.round(voz[Math.floor(voz.length * 0.9)]);
+    return { estado: vozDb < o.bajo ? 'bajo' : 'bien', vozDb };
+  }
+
+  /** Aviso del micro: el propio («Tu micro…») o el de la otra persona, con su nombre. */
+  function avisoDeMicro(estado, { nombre } = {}) {
+    if (estado === 'bajo') return nombre ? `🎙 El micro de ${nombre} llega bajo` : '🎙 Tu micro llega bajo: acércate o súbele el volumen';
+    if (estado === 'satura') return nombre ? `🎙 El micro de ${nombre} satura` : '🎙 Tu micro satura: bájale el volumen o aléjate un poco';
+    return '';
+  }
+
   const api = {
     viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio,
     recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro, avisoDeMarca, textoBotonCorte,
+    nivelDelMicro, avisoDeMicro,
   };
   root.Llamada = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
