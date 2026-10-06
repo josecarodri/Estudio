@@ -70,21 +70,56 @@
   }
 
   /**
-   * La sala da la bienvenida (welcome) a quien acaba de entrar. ¿Qué hace con una grabación en curso?
-   * - 'retomar': venimos de una caída (el usuario pidió retomar) y la grabación sigue: se graba ya, como tramo nuevo.
-   * - 'terminada': venimos de una caída pero la grabación ya acabó mientras tanto: no hay nada que retomar.
-   * - 'avisar': entra alguien normal con una grabación en marcha: empezará con la próxima.
-   * - 'nada': no hay grabación en curso.
+   * ¿Qué hace esta página con la grabación de la sala? Se pregunta al entrar (welcome) y cada pocos
+   * segundos, porque una orden de grabar o de parar se pierde si la conexión de esa página se corta
+   * justo entonces. Antes, quien se perdía la orden de grabar no grababa nada en toda la sesión, y quien
+   * se perdía la de parar seguía grabando sin poder pararlo.
+   *  - grabando / miSesion: si esta página graba, y qué sesión.
+   *  - sesion: la grabación de la sala según el servidor ({ id, recording }), o null si no sabe de ninguna.
+   * Devuelve:
+   *  - 'retomar': venimos de una caída de la página y la grabación sigue: se graba ya, como tramo nuevo.
+   *  - 'unirse': hay una grabación en marcha y esta página no graba (no le llegó la orden, o entró después).
+   *  - 'parar': esta página sigue grabando una sesión que ya se paró.
+   *  - 'cambiar': graba una sesión vieja y hay otra en marcha: para la suya y se une a la nueva.
+   *  - 'terminada': venimos de una caída pero la grabación ya acabó mientras tanto.
+   *  - 'nada'.
+   * Si el servidor no sabe de ninguna grabación (p. ej. se reinició), quien graba sigue grabando.
    */
-  function alRecibirGrabacion({ recuperando, grabandoYa, sesionEnCurso }) {
-    if (grabandoYa) return 'nada';
-    if (sesionEnCurso) return recuperando ? 'retomar' : 'avisar';
+  function alRecibirGrabacion({ recuperando, grabando, miSesion, sesion }) {
+    const enCurso = !!(sesion && sesion.recording);
+    if (grabando) {
+      if (!sesion) return 'nada';
+      if (sesion.id === miSesion) return enCurso ? 'nada' : 'parar';
+      return enCurso ? 'cambiar' : 'parar';
+    }
+    if (enCurso) return recuperando ? 'retomar' : 'unirse';
     return recuperando ? 'terminada' : 'nada';
+  }
+
+  /**
+   * En la comprobación periódica, ¿es pronto para actuar? La orden normal (con su cuenta atrás y su
+   * pitido) puede estar aún en camino: se le da `margenMs` desde la hora de empezar o de parar.
+   */
+  function esPronto({ accion, sesion, ahora, margenMs = 2000 }) {
+    if (!sesion) return false;
+    if (accion === 'unirse' || accion === 'cambiar') return ahora < sesion.startAt + margenMs;
+    if (accion === 'parar') return ahora < (sesion.stopAt || 0) + margenMs;
+    return false;
+  }
+
+  /**
+   * Indicador de si la otra persona graba, para quien está grabando. 'graba' o 'no-graba' (tras
+   * `graciaMs` desde que empezó, para no avisar durante la cuenta atrás), o null si no hay nada que decir.
+   */
+  function estadoDelOtro({ hayOtro, yoGrabo, otroGraba, msGrabando, graciaMs = 5000 }) {
+    if (!hayOtro || otroGraba === undefined || otroGraba === null) return null;
+    if (otroGraba) return 'graba';
+    return yoGrabo && msGrabando > graciaMs ? 'no-graba' : null;
   }
 
   const api = {
     viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio,
-    recuperacionVigente, alRecibirGrabacion,
+    recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro,
   };
   root.Llamada = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

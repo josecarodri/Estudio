@@ -117,6 +117,9 @@ function peerList(room) {
 
 function sessionDir(room, id) { return path.join(REC_DIR, room, id); }
 
+/** Bytes de cabecera al principio del archivo de una pista (los WAV llevan 44). */
+const cabecera = (t) => (t.ext === 'wav' ? 44 : 0);
+
 function saveSession(s) {
   fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({ ...s, dir: undefined }, null, 2));
 }
@@ -163,14 +166,17 @@ const MIME = {
   '.webmanifest': 'application/manifest+json', '.sh': 'text/plain; charset=utf-8',
 };
 
-/** Sirve un archivo dentro de baseDir evitando salir de él. */
+/**
+ * Sirve un archivo dentro de baseDir evitando salir de él. `download`: true para descargarlo, o el
+ * nombre con el que debe llegar a Descargas.
+ */
 function serveFile(req, res, baseDir, relPath, download) {
   const file = path.resolve(baseDir, '.' + path.posix.normalize('/' + relPath));
   if (!file.startsWith(baseDir + path.sep) && file !== baseDir) return json(res, 403, { error: 'Prohibido' });
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return json(res, 404, { error: 'No encontrado' });
     const headers = { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'Content-Length': st.size };
-    if (download) headers['Content-Disposition'] = `attachment; filename="${path.basename(file)}"`;
+    if (download) headers['Content-Disposition'] = `attachment; filename="${typeof download === 'string' ? download : path.basename(file)}"`;
     else headers['Cache-Control'] = 'no-cache';
     res.writeHead(200, headers);
     if (req.method === 'HEAD') return res.end();
@@ -188,7 +194,12 @@ async function handle(req, res) {
   if (privateRoute && !isLocalRequest(req)) return forbidden(res, 'Las grabaciones solo se pueden ver desde el PC del estudio.');
 
   if (parts[0] !== 'api') {
-    if (parts[0] === 'grabaciones') return serveFile(req, res, REC_DIR, parts.slice(1).join('/'), true);
+    // Al descargar, el nombre lleva la sesión (2026-10-10_21-30-05_dj_camara.mp4): si se bajan varias
+    // sesiones a la misma carpeta no se confunden, y el editor sabe de qué sesión es cada archivo.
+    if (parts[0] === 'grabaciones') {
+      const nombre = parts.length === 4 ? `${parts[2]}_${parts[3]}` : true;
+      return serveFile(req, res, REC_DIR, parts.slice(1).join('/'), nombre);
+    }
     return serveFile(req, res, PUBLIC_DIR, parts.length ? parts.join('/') : 'index.html', false);
   }
 
@@ -207,6 +218,10 @@ async function handle(req, res) {
     const roomName = slug(parts[2], 'sala');
     const room = getRoom(roomName);
     const action = parts[3];
+
+    // Estado de la grabación de la sala. Las páginas lo consultan cada pocos segundos por si se
+    // perdieron la orden de grabar o de parar (un corte de su conexión justo en ese momento).
+    if (action === 'sesion' && req.method === 'GET') return json(res, 200, { session: room.session, now: now() });
 
     if (action === 'signal' && req.method === 'POST') {
       const msg = await readJson(req);
@@ -298,6 +313,12 @@ async function handle(req, res) {
       if (previa) part.retomaDe = previa[1].label;
       slog('grabacion-retomada', { sala: s.room, sesion: s.id, nombre: part.name, retoma_de: part.retomaDe });
     }
+    // Una página que no recibió la orden de grabar (se cortó su conexión justo entonces, o entró con la
+    // grabación ya en marcha) y se unió después: sus pistas no llevan pitido de inicio.
+    if (m.tarde && !part.tarde) {
+      part.tarde = true;
+      slog('grabacion-tarde', { sala: s.room, sesion: s.id, nombre: part.name });
+    }
     if (!part.label) {
       const base = slug(part.name, 'persona');
       const used = new Set(Object.values(s.participants).map((p) => p.label).filter(Boolean));
@@ -317,6 +338,14 @@ async function handle(req, res) {
       // El servidor se reinició a mitad de grabación: se continúa donde se quedó.
       const p = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
       t = { file, progressFile, nextSeq: p.nextSeq, bytes: p.bytes, ext };
+      // Si se cayó justo entre guardar un trozo y apuntarlo, ese trozo está de más en el archivo y va a
+      // llegar otra vez: se quita para que no quede duplicado.
+      const esperado = cabecera(t) + p.bytes;
+      const tam = fs.statSync(file).size;
+      if (tam > esperado) {
+        slog('pista-recortada', { sala: s.room, sesion: s.id, archivo: fileName, sobraban_bytes: tam - esperado });
+        fs.truncateSync(file, esperado);
+      }
       tracks.set(key, t);
     }
     if (!t) {
@@ -348,14 +377,44 @@ async function handle(req, res) {
     if (decision === 'gap') { req.resume(); return json(res, 409, { error: 'Falta un trozo anterior', expected: t.nextSeq }); }
     const body = await readBody(req);
     if (decision === 'duplicate') return json(res, 200, { ok: true, duplicate: true, nextSeq: t.nextSeq });
-    // Serializa escrituras de la misma pista.
-    t.writing = (t.writing || Promise.resolve()).then(async () => {
-      await fs.promises.appendFile(t.file, body);
+    // Serializa escrituras de la misma pista. La decisión se vuelve a tomar dentro: mientras llegaba
+    // este cuerpo pudo llegar y guardarse el mismo trozo por otro envío (dos pestañas, un reintento),
+    // y añadirlo otra vez lo duplicaría y desplazaría todo lo que viene detrás.
+    // Un fallo al escribir no bloquea la pista: el siguiente envío vuelve a intentarlo.
+    const turno = (t.writing || Promise.resolve()).catch(() => {}).then(async () => {
+      const ahora = chunkDecision(t.nextSeq, seq);
+      if (ahora !== 'append') return ahora;
+      try {
+        await fs.promises.appendFile(t.file, body);
+      } catch (err) {
+        // Lo que se llegara a escribir de este trozo se quita: el reintento lo manda entero.
+        await fs.promises.truncate(t.file, cabecera(t) + t.bytes).catch(() => {});
+        throw err;
+      }
       t.nextSeq++; t.bytes += body.length;
+      // El WAV vale en todo momento, aunque la página muera antes de cerrarlo.
+      if (t.ext === 'wav') fixWavHeader(t.file);
       await fs.promises.writeFile(t.progressFile, JSON.stringify({ nextSeq: t.nextSeq, bytes: t.bytes }));
+      return 'append';
     });
-    await t.writing;
+    t.writing = turno;
+    const hecho = await turno;
+    if (hecho === 'duplicate') return json(res, 200, { ok: true, duplicate: true, nextSeq: t.nextSeq });
+    if (hecho === 'gap') return json(res, 409, { error: 'Falta un trozo anterior', expected: t.nextSeq });
     return json(res, 200, { ok: true, nextSeq: t.nextSeq, bytes: t.bytes });
+  }
+
+  // POST /api/tracks/start — hora a la que empezó de verdad una pista. Se manda en cuanto se sabe (y no
+  // solo al cerrarla) para que quede aunque la página muera: el editor la usa para situar los tramos.
+  if (parts[1] === 'tracks' && parts[2] === 'start' && req.method === 'POST') {
+    const m = await readJson(req);
+    const s = loadSession(slug(m.room, 'sala'), String(m.session || ''));
+    if (!s || !s.tracks[m.track]) return json(res, 404, { error: 'Pista desconocida' });
+    if (Number.isFinite(m.startedAtServer) && !s.tracks[m.track].complete) {
+      s.tracks[m.track].startedAtServer = m.startedAtServer;
+      saveSession(s);
+    }
+    return json(res, 200, { ok: true });
   }
 
   // POST /api/tracks/finish — cierra una pista y guarda sus tiempos para sincronizar
@@ -365,7 +424,7 @@ async function handle(req, res) {
     if (!s || !s.tracks[m.track]) return json(res, 404, { error: 'Pista desconocida' });
     const t = tracks.get(`${s.room}/${s.id}/${m.track}`);
     if (t) {
-      await t.writing;
+      await (t.writing || Promise.resolve()).catch(() => {});
       if (t.nextSeq < m.chunks) return json(res, 409, { error: 'Faltan trozos', expected: t.nextSeq });
       if (t.ext === 'wav') fixWavHeader(t.file);
     }
@@ -373,7 +432,7 @@ async function handle(req, res) {
       complete: true,
       chunks: m.chunks,
       bytes: t ? fs.statSync(t.file).size : null,
-      startedAtServer: m.startedAtServer ?? null,
+      startedAtServer: m.startedAtServer ?? s.tracks[m.track].startedAtServer ?? null,
       endedAtServer: m.endedAtServer ?? null,
       beepOffsetSec: m.beepOffsetSec ?? null,
       endBeepOffsetSec: m.endBeepOffsetSec ?? null,

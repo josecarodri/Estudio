@@ -14,13 +14,20 @@ en Safari.
 
 ## 2. Descargar Estudio
 
-1. Entra en https://github.com/josecarodri/Personal con tu cuenta de GitHub.
-2. Comprueba que arriba a la izquierda, en el botón de la rama, pone **`main`** (si no, elígela ahí).
-3. Pulsa el botón verde **Code → Download ZIP**.
-4. Antes de descomprimir: clic derecho sobre el ZIP → **Propiedades** → marca **Desbloquear** (abajo) → **Aceptar**.
+1. Entra en https://github.com/josecarodri/Estudio (ahí está todo lo del podcast: la grabación y el editor).
+   Comprueba que arriba a la izquierda, en el botón de la rama, pone **`main`**.
+2. Pulsa el botón verde **Code → Download ZIP**.
+3. Antes de descomprimir: clic derecho sobre el ZIP → **Propiedades** → marca **Desbloquear** (abajo) → **Aceptar**.
    Así Windows no bloqueará los archivos de doble clic.
-5. Clic derecho → **Extraer todo…** y elige una carpeta cómoda, por ejemplo `Documentos`.
-6. Entra en la carpeta extraída y después en **`estudio`**. Todo lo demás se hace desde ahí.
+4. Clic derecho → **Extraer todo…** y elige dónde (lo habitual: `C:\Users\Carlos\Estudio`). El editor del podcast
+   viene dentro, en la carpeta `edicion`, y coge las grabaciones de la carpeta `grabaciones` de aquí mismo.
+5. Entra en la carpeta extraída (se llama `Estudio-main`; puedes renombrarla a `Estudio`). En esta guía, «la carpeta
+   del Estudio» es esa. Todo lo demás se hace desde ahí.
+
+> **Para actualizar** a una versión nueva: si la descargaste con git, `git pull` en esa carpeta. Si fue en ZIP,
+> descarga el nuevo y copia sus archivos encima: tus `grabaciones`, `.env`, `certs` y `logs` no vienen en el ZIP y
+> no se tocan. Si editas los episodios con Claude Code, mejor tenerla con git
+> (`git clone https://github.com/josecarodri/Estudio`): así Claude puede guardar y subir sus cambios.
 
 ## 3. Instalar (una sola vez)
 
@@ -56,7 +63,7 @@ Si la otra persona está en tu misma casa o red, usa en su lugar **`Estudio mism
 
 ## 5. Dónde están las grabaciones
 
-En la carpeta **`estudio\grabaciones`**, una subcarpeta por sala y otra por cada grabación (fecha y hora).
+En la carpeta **`grabaciones`** del Estudio, una subcarpeta por sala y otra por cada grabación (fecha y hora).
 También puedes verlas y descargarlas desde el enlace **Grabaciones** (arriba a la derecha en el estudio).
 
 ## 6. (Opcional) Alinear automáticamente para el editor
@@ -82,17 +89,17 @@ universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
    Después pulsa **Create** (ponle un nombre, p. ej. «Estudio»).
 3. Cloudflare te muestra dos valores: **Turn Token ID** y **API Token**. Cópialos en un lugar seguro: el API Token
    solo se muestra una vez (si lo pierdes, crea otra clave).
-4. En la carpeta `estudio`, doble clic en **`Configurar TURN (Windows).bat`**, pega cada valor cuando lo pida
+4. En la carpeta del Estudio, doble clic en **`Configurar TURN (Windows).bat`**, pega cada valor cuando lo pida
    (clic derecho en la ventana para pegar) y pulsa Intro. Al final comprueba la conexión con Cloudflare y debe poner
    **«✓ TURN configurado correctamente»**.
 5. Vuelve a abrir el estudio. En la ventana negra debe poner **`TURN: configurado ✓`**.
 
-Los valores se guardan en el archivo `estudio\.env`, que solo está en tu PC (no se sube a GitHub). No los compartas:
+Los valores se guardan en el archivo `.env` de la carpeta del Estudio, que solo está en tu PC (no se sube a GitHub). No los compartas:
 quien los tenga puede usar tu cuota de Cloudflare.
 
 <details><summary>Hacerlo a mano en lugar del doble clic</summary>
 
-Crea en la carpeta `estudio` un archivo llamado `.env` (con el Bloc de notas: **Guardar como** → Tipo **Todos los
+Crea en la carpeta del Estudio un archivo llamado `.env` (con el Bloc de notas: **Guardar como** → Tipo **Todos los
 archivos** → nombre `.env`) con estas dos líneas, sin espacios ni comillas:
 
 ```
@@ -114,7 +121,7 @@ su iPad y entrar con un toque. Tailscale es gratuito para uso personal y solo ha
 
 1. Descarga Tailscale de https://tailscale.com/download/windows, instálalo e **inicia sesión** (con Google, Microsoft,
    GitHub…). Debe quedar el icono de Tailscale junto al reloj, conectado.
-2. En la carpeta `estudio`, doble clic en **`Elegir tipo de enlace (Windows).bat`** y pulsa **1** (fijo).
+2. En la carpeta del Estudio, doble clic en **`Elegir tipo de enlace (Windows).bat`** y pulsa **1** (fijo).
 3. Abre el estudio con el icono **Estudio**. **Solo la primera vez**, Tailscale abre una página en el navegador para
    activar *Funnel* (y los certificados HTTPS): pulsa **Enable / Activar**. La ventana negra muestra entonces
    **«Dirección fija: https://….ts.net»**. El primer acceso desde fuera puede tardar hasta un minuto mientras

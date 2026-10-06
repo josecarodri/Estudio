@@ -1,14 +1,17 @@
 {
   "name": "estudio-grabacion",
   "version": "1.0.0",
-  "description": "Grabación local de llamadas a dos (estilo Riverside): cada dispositivo graba su cámara y micrófono en alta calidad y además se graba la llamada para sincronizar después",
+  "description": "Grabación local de llamadas a dos (estilo Riverside): cada dispositivo graba su cámara y micrófono en alta calidad y además se graba la llamada para sincronizar después. Incluye el editor del podcast (edicion/): monta el episodio en Kdenlive y lo deja listo para YouTube",
   "private": true,
   "scripts": {
     "start": "node server.js",
     "alinear": "node tools/alinear.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test tests/*.test.js edicion/tests/*.test.js",
+    "test:grabacion": "node --test tests/*.test.js",
+    "test:edicion": "node --test edicion/tests/*.test.js",
     "internet": "node server.js --internet",
-    "probar-turn": "node tools/probar-turn.js"
+    "probar-turn": "node tools/probar-turn.js",
+    "edicion": "node edicion/cli.js"
   },
   "engines": {
     "node": ">=18"

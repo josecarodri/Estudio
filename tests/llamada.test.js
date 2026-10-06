@@ -62,12 +62,43 @@ test('recuperación: la marca solo vale si es de una grabación en curso, comple
   assert.strictEqual(L.recuperacionVigente({ ...ok, sala: '' }, ahora, 900_000), null, 'marca incompleta');
 });
 
-test('al entrar con una grabación en curso: solo se retoma si venimos de una caída', () => {
-  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabandoYa: false, sesionEnCurso: true }), 'retomar');
-  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabandoYa: false, sesionEnCurso: true }), 'avisar',
-    'quien entra normal no empieza a grabar sin que se lo pidan');
-  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabandoYa: false, sesionEnCurso: false }), 'terminada');
-  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabandoYa: false, sesionEnCurso: false }), 'nada');
-  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabandoYa: true, sesionEnCurso: true }), 'nada',
+test('al entrar con una grabación en curso: se retoma si venimos de una caída, y si no, se une igualmente', () => {
+  const enCurso = { id: 's1', recording: true };
+  const parada = { id: 's1', recording: false };
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabando: false, sesion: enCurso }), 'retomar');
+  // Antes esto era «empezará con la próxima» y esa persona no grababa nada en toda la sesión. En un estudio
+  // de dos, quien entra con la grabación en marcha es uno de los dos: perder sus pistas es lo peor que puede pasar.
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabando: false, sesion: enCurso }), 'unirse');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabando: false, sesion: parada }), 'terminada');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabando: false, sesion: parada }), 'nada');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: false, grabando: false, sesion: null }), 'nada');
+  assert.strictEqual(L.alRecibirGrabacion({ recuperando: true, grabando: true, miSesion: 's1', sesion: enCurso }), 'nada',
     'una segunda bienvenida (reconexión de la sala) no debe arrancar una segunda grabación');
+});
+
+test('quien sigue grabando una sesión que ya se paró, para; si hay otra nueva en marcha, se pasa a ella', () => {
+  assert.strictEqual(L.alRecibirGrabacion({ grabando: true, miSesion: 's1', sesion: { id: 's1', recording: false } }), 'parar');
+  assert.strictEqual(L.alRecibirGrabacion({ grabando: true, miSesion: 's1', sesion: { id: 's2', recording: true } }), 'cambiar');
+  assert.strictEqual(L.alRecibirGrabacion({ grabando: true, miSesion: 's1', sesion: { id: 's2', recording: false } }), 'parar');
+  assert.strictEqual(L.alRecibirGrabacion({ grabando: true, miSesion: 's1', sesion: null }), 'nada',
+    'si el servidor no sabe de ninguna grabación (se reinició), se sigue grabando: lo grabado está a salvo en el dispositivo');
+});
+
+test('la comprobación periódica deja tiempo a la orden normal (con su cuenta atrás y su pitido)', () => {
+  const sesion = { id: 's1', recording: true, startAt: 10_000, stopAt: 50_000 };
+  assert.strictEqual(L.esPronto({ accion: 'unirse', sesion, ahora: 9_000 }), true, 'aún no ha empezado');
+  assert.strictEqual(L.esPronto({ accion: 'unirse', sesion, ahora: 11_000 }), true, 'la orden puede ir de camino');
+  assert.strictEqual(L.esPronto({ accion: 'unirse', sesion, ahora: 12_500 }), false);
+  assert.strictEqual(L.esPronto({ accion: 'parar', sesion, ahora: 51_000 }), true);
+  assert.strictEqual(L.esPronto({ accion: 'parar', sesion, ahora: 52_500 }), false);
+});
+
+test('indicador de la otra persona: graba, o NO graba pasados unos segundos (no durante la cuenta atrás)', () => {
+  assert.strictEqual(L.estadoDelOtro({ hayOtro: true, yoGrabo: true, otroGraba: true, msGrabando: 100 }), 'graba');
+  assert.strictEqual(L.estadoDelOtro({ hayOtro: true, yoGrabo: true, otroGraba: false, msGrabando: 1000 }), null);
+  assert.strictEqual(L.estadoDelOtro({ hayOtro: true, yoGrabo: true, otroGraba: false, msGrabando: 6000 }), 'no-graba');
+  assert.strictEqual(L.estadoDelOtro({ hayOtro: true, yoGrabo: false, otroGraba: false, msGrabando: 0 }), null);
+  assert.strictEqual(L.estadoDelOtro({ hayOtro: false, yoGrabo: true, otroGraba: false, msGrabando: 9000 }), null);
+  assert.strictEqual(L.estadoDelOtro({ hayOtro: true, yoGrabo: true, otroGraba: undefined, msGrabando: 9000 }), null,
+    'sin noticias de la otra página (versión antigua) no se avisa');
 });

@@ -116,11 +116,32 @@
       this._loop().finally(() => { this._running = false; this._emit(); });
     }
 
+    /**
+     * Hora (del reloj común) a la que empezó de verdad la pista. Se manda en cuanto se sabe, y no solo al
+     * cerrarla, para que el servidor la tenga aunque esta página muera: el editor la usa para situar los tramos.
+     */
+    anotarInicio(startedAtServer) {
+      if (!Number.isFinite(startedAtServer)) return;
+      this.inicio = startedAtServer;
+      this._inicioEnviado = false;
+      this._kick();
+    }
+
     async _loop() {
       let delay = 1000;
-      while (this.acked < this.count || (this.finishInfo && !this.finished)) {
+      while (this.acked < this.count || (this.finishInfo && !this.finished) || (this.inicio !== undefined && !this._inicioEnviado)) {
         try {
           if (!this._registered) await this._register();
+          if (this.inicio !== undefined && !this._inicioEnviado) {
+            const r = await fetch('/api/tracks/start', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ room: this.info.room, session: this.info.session, track: this.trackId, startedAtServer: this.inicio }),
+            });
+            // Un 404 no se reintenta: es solo un dato de ayuda y no debe frenar la subida.
+            if (!r.ok && r.status !== 404) throw new Error(`HTTP ${r.status}`);
+            this._inicioEnviado = true;
+            continue;
+          }
           if (this.acked < this.count) {
             const seq = this.acked;
             const blob = await this._getChunk(seq);

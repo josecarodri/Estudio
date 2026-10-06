@@ -103,7 +103,8 @@ function alignSession(dir) {
     const person = s.participants[t.participant]?.name || t.participant;
     const expected = t.beepOffsetSec;
     const drift = expected != null ? ` (metadatos: ${expected.toFixed(3)} s)` : '';
-    console.log(`  · ${t.file}: pitido en ${beep.toFixed(3)} s — ${source}${drift}`);
+    const tarde = beep < 0 ? ' · empezó después del pitido (tramo retomado o que se unió tarde)' : '';
+    console.log(`  · ${t.file}: pitido en ${beep.toFixed(3)} s — ${source}${drift}${tarde}`);
     const dur = duration(file);
 
     // Deriva: cada dispositivo tiene su propio reloj de audio/vídeo y en una hora pueden separarse decenas de ms.
@@ -131,10 +132,18 @@ function alignSession(dir) {
   }
   if (!items.length) { console.log('  Nada que alinear.'); return; }
 
-  // Todas las salidas empiezan LEAD segundos antes del pitido (lo máximo que permiten todas las pistas).
-  const lead = Math.max(0, Math.min(1, ...items.map((i) => i.beep * i.ratio)));
-  const durations = items.map((i) => (i.dur != null ? (i.dur - (i.beep - lead / i.ratio)) * i.ratio : null)).filter((d) => d != null && d > 0);
-  const common = durations.length === items.length ? Math.min(...durations) : null;
+  // Una pista que empezó después del pitido (un tramo retomado tras la caída de la página, o una página que se
+  // unió tarde) no se recorta: se desplaza a su sitio con silencio (y negro) delante. Por eso no cuenta para LEAD.
+  const conPitido = items.filter((i) => i.beep >= 0);
+  // Todas las salidas empiezan LEAD segundos antes del pitido (lo máximo que permiten las pistas que lo tienen).
+  const lead = conPitido.length ? Math.max(0, Math.min(1, ...conPitido.map((i) => i.beep * i.ratio))) : 0;
+  // La duración común la marcan las pistas que llegaron al final (con su pitido de cierre): una que se cortó
+  // porque su página murió es más corta, y no debe recortar a las demás.
+  const fin = (i) => (i.dur != null ? (i.dur - (i.beep - lead / i.ratio)) * i.ratio : null);
+  const completas = items.filter((i) => i.endBeep != null).map(fin).filter((d) => d != null && d > 0);
+  const todas = items.map(fin).filter((d) => d != null && d > 0);
+  const common = completas.length ? Math.min(...completas)
+    : (!nominal && todas.length === items.length ? Math.min(...todas) : null);
   const outDir = path.join(dir, 'alineados');
   fs.mkdirSync(outDir, { recursive: true });
 
@@ -150,6 +159,8 @@ function alignSession(dir) {
   for (const it of items) {
     const R = it.ratio;
     const trim = it.beep - lead / R;          // segundo del archivo original que pasa a ser el 0
+    // Si es negativo, la pista empezó después del 0 común: va desplazada esos segundos (de la salida).
+    const retraso = trim < 0 ? -trim * R : 0;
     const base = path.basename(it.t.file, path.extname(it.t.file));
     const isWav = it.t.format === 'wav' || !it.hasVideo;
     const out = path.join(outDir, `${base}.${isWav ? 'wav' : 'mp4'}`);
@@ -157,10 +168,11 @@ function alignSession(dir) {
     if (common) a.push('-t', common.toFixed(4));
     const afilters = [
       'aresample=48000:async=1:first_pts=0',
-      `atrim=start=${trim.toFixed(6)}`,
+      ...(retraso ? [] : [`atrim=start=${trim.toFixed(6)}`]),
       `asetpts=(PTS-STARTPTS)*${R.toFixed(9)}`,
       // Estira/encoge el audio con remuestreo suave para que coincida con las marcas de tiempo corregidas.
       ...(R !== 1 ? ['aresample=48000:async=4800'] : []),
+      ...(retraso ? [`adelay=${Math.round(retraso * 1000)}:all=1`] : []),
     ];
     if (!KEEP_BEEP) {
       const mute = (at) => `volume=enable='between(t,${(at - 0.02).toFixed(3)},${(at + 0.3).toFixed(3)})':volume=0`;
@@ -170,7 +182,12 @@ function alignSession(dir) {
     if (isWav) {
       a.push('-vn', '-af', afilters.join(','), '-c:a', 'pcm_s24le', out);
     } else {
-      const vfilters = [`trim=start=${trim.toFixed(6)}`, `setpts=(PTS-STARTPTS)*${R.toFixed(9)}`, `fps=${FPS}`, 'format=yuv420p'];
+      const vfilters = [
+        ...(retraso ? [] : [`trim=start=${trim.toFixed(6)}`]),
+        `setpts=(PTS-STARTPTS)*${R.toFixed(9)}`,
+        ...(retraso ? [`tpad=start_duration=${retraso.toFixed(6)}:color=black`] : []),
+        `fps=${FPS}`, 'format=yuv420p',
+      ];
       a.push('-vf', vfilters.join(','), '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF), '-movflags', '+faststart');
       if (it.hasAudio) a.push('-af', afilters.join(','), '-c:a', 'aac', '-b:a', '320k', '-ar', '48000');
       a.push(out);
@@ -179,7 +196,8 @@ function alignSession(dir) {
     const r = run('ffmpeg', a, { stdio: ['ignore', 'inherit', 'inherit'] });
     if (r.status !== 0) { console.log(`    ✗ ffmpeg falló con ${it.t.file}`); continue; }
     const driftTxt = R !== 1 ? `, deriva corregida ${((R - 1) * 1e6).toFixed(0)} ppm` : '';
-    report.push(`${path.basename(out)}  ←  ${it.t.file}  (${it.person}, recortado ${trim.toFixed(3)} s al inicio${driftTxt})`);
+    const inicio = retraso ? `empieza ${retraso.toFixed(3)} s después (tramo sin pitido de inicio)` : `recortado ${trim.toFixed(3)} s al inicio`;
+    report.push(`${path.basename(out)}  ←  ${it.t.file}  (${it.person}, ${inicio}${driftTxt}${it.endBeep == null && nominal ? ', sin pitido final: se cortó antes' : ''})`);
     if (it.t.kind === 'camara') cams.push({ out, participant: it.t.participant, person: it.person });
   }
   if (cams.length === 2 && !NO_SIDE_BY_SIDE) {
