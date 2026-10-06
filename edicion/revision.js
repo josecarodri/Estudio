@@ -26,7 +26,8 @@ const existe = (p) => { try { fs.accessSync(p); return true; } catch { return fa
 
 /*
  * Qué trozos lleva la revisión: el principio, cada empalme (salvo los de silencios, si no se piden),
- * las uniones entre partes y el final. Los que se tocan se juntan en uno. Tiempos en frames del
+ * los avisos «⚠» (cámara congelada cubierta con la otra), los dos primeros planos dobles «◫», las
+ * uniones entre partes y el final. Los que se tocan se juntan en uno. Tiempos en frames del
  * montaje final. Devuelve { trozos: [{ n, desde, hasta, textos, empalmes }], silenciosFuera, segundosFuera }.
  */
 function trozosDeRevision(receta, opciones) {
@@ -37,8 +38,13 @@ function trozosDeRevision(receta, opciones) {
   const puntos = [];
   let silenciosFuera = 0;
   let segundosFuera = 0;
+  let dobles = 0;
   for (const g of receta.guides || []) {
     const c = CUT.leerGuiaDeCorte(g);
+    // Avisos del montaje (cámara congelada cubierta con la otra…): también se revisan.
+    if (!c && /^⚠ /.test(String(g.name || ''))) puntos.push({ at: g.at, texto: String(g.name).slice(2) });
+    // Del plano doble, los dos primeros: para ver cómo queda sin llenar la revisión.
+    if (!c && /^◫ /.test(String(g.name || '')) && dobles < 2) { dobles += 1; puntos.push({ at: g.at, texto: String(g.name).slice(2) }); }
     if (!c) continue;
     if (c.motivo === 'silencio' && !o.silencios) {
       silenciosFuera += 1;
@@ -87,7 +93,7 @@ function trozosDeRevision(receta, opciones) {
 /* El texto que se escribe sobre el vídeo: sin símbolos que a lo mejor no tiene la fuente. */
 function etiqueta(trozo, fps) {
   const donde = reloj((trozo.empalmes[0] ?? trozo.desde) / fps);
-  const texto = `${trozo.n} · ${donde} · ${trozo.textos.join(' + ')}`.replace(/[✂★]\s?/g, '');
+  const texto = `${trozo.n} · ${donde} · ${trozo.textos.join(' + ')}`.replace(/[✂★⚠◫]\s?/g, '');
   return texto.length > 90 ? `${texto.slice(0, 89)}…` : texto;
 }
 
@@ -123,7 +129,8 @@ function renderizarTrozo(receta, trozo, h) {
   const proyecto = path.join(h.dir, `trozo-${huella}.kdenlive`);
   fs.writeFileSync(proyecto, built.xml, 'utf8');
   const tmp = path.join(h.dir, `trozo-${huella}.tmp.mp4`);
-  const res = spawnSync(h.melt, [proyecto, '-consumer', `avformat:${tmp}`, 'vcodec=libx264', 'crf=20', 'preset=veryfast', 'acodec=aac', 'ab=192k'],
+  const [cmd, ...previos] = [].concat(h.melt); // melt, o [xvfb-run, -a, melt] en Linux sin pantalla (media.comandoMelt)
+  const res = spawnSync(cmd, [...previos, proyecto, '-consumer', `avformat:${tmp}`, 'vcodec=libx264', 'crf=20', 'preset=veryfast', 'acodec=aac', 'ab=192k'],
     { stdio: 'ignore', timeout: 30 * 60000 });
   fs.rmSync(proyecto, { force: true });
   if (res.status !== 0 || !existe(tmp)) {

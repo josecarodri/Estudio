@@ -161,6 +161,41 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
   `revision.test.js`, `avisos.test.js`, saltos en `cortes.test.js`, marcas en `auto.test.js` y de punta a punta en
   `kdenlive.test.js` (analizar con marcas, episodio con salto disimulado, guías y revisión).
 
+## YouTube, cámaras, plano doble, rótulos, shorts y disco (2026-10-06)
+- **YouTube** (`youtube.js`, `youtube`): el «mapa del montaje» traduce la transcripción de cada parte al vídeo final
+  comparando dónde empieza cada micro en `parte-N/multicam.json` (in − at de cada micro) con dónde quedó cada trozo en
+  `montaje/episodio.json`: lo cortado no sale, lo repetido (`alFinal`, `insertar`) sale dos veces, y no hace falta
+  transcribir el vídeo final. Subtítulos de 2 líneas de 42 caracteres (mejor partidas tras un punto), `indice.md` para
+  elegir capítulos sin leer la transcripción, capítulos por frase (siguen bien si cambian los cortes) y avisos con las
+  reglas de YouTube. `episodio` lo hace solo al final si ya hay transcripciones.
+- **Cámara congelada / en negro / sin imagen** (`camaras.js` + `CUT.cubrirCamaras`): ffmpeg `fps=5,scale=160`,
+  `freezedetect=n=0.0003:d=1` (los trozos a menos de 0,6 s se juntan: cada imagen clave parte una congelación) y
+  `blackdetect`; «sin imagen» si el vídeo acaba 2 s o más antes que el archivo. ≈3 min por hora de vídeo, guardado en
+  `montaje/camaras.json`. Medido: un hueco sin imágenes (lo que deja una cámara colgada) da exactamente 0 y se detecta
+  exacto; la misma imagen repetida a 10 Mb/s se detecta casi entera (el compresor la afina un poco al principio); una
+  imagen quieta con ruido de cámara a esa calidad no da falsos positivos, pero a calidad baja (CRF 23 en 320x180) sí:
+  el compresor se come el ruido. Se cubre con la otra cámara antes de copiar tramos y de disimular saltos (con vetos).
+  Las cámaras de las sesiones falsas de las pruebas se mueven todas (antes la de jc era una carta de ajuste fija).
+- **Plano doble** (`CUT.planoDoble`, `planoDoble`): 3 o más planos seguidos de menos de 2,5 s → los dos a la vez, zoom
+  0,5 y ±ancho/4 (jc a la izquierda, V1; el otro en V2). Las funciones de planos (`planosDeVideo`) solo miran V1.
+- **Rótulos** (`rotulos.js`, `rotulos.nombres`): QuickTime Animation (qtrle, argb) con `drawtext` en caja y fundido
+  de alfa, en V3, en el primer plano de cada uno solo en que quepa. Las entradas de cada pista tienen que ir en orden
+  de tiempo (si no, el montaje las toma por solapes): se ordena `edit` por `at`.
+- **qtblend necesita pantalla en Linux**: el módulo Qt de MLT 7.22 no carga sin X11 (tampoco con
+  `QT_QPA_PLATFORM=offscreen`), y sin él el reencuadre no se aplica al renderizar (el `.kdenlive` está bien). En Linux
+  sin pantalla, melt se ejecuta con `xvfb-run -a` si está (`media.comandoMelt`). En Windows no pasa.
+- **Shorts** (`shorts.js`, `shorts`): receta 9:16 del montaje final; zoom para llenar el alto = alto·(16/9)/ancho
+  (3,16 con 1080x1920, medido: con 1,78 queda una franja); plano doble arriba/abajo (zoom 1,58, tilt ±alto/4). Por ★:
+  40 s antes y 8 después, ajustado a frases (el inicio solo se adelanta hasta 2 s, al menos 5 s, como mucho 60).
+  Subtítulos ASS (22 caracteres por línea) y −14 LUFS con ffmpeg.
+- **Aviso de micro bajo** (Estudio, `Llamada.nivelDelMicro`): nivel cada 100 ms de los últimos 20 s; voz = lo que pasa
+  de 12 dB sobre el ruido de fondo; «bajo» si su percentil 90 no llega a −32 dBFS, «satura» con 3 picos a 0 dBFS.
+  Comprobado en Chromium con un micro falso a −42 dBFS.
+- **Tiempos y disco**: `estado` dice lo que tardó cada fase la última vez (historial en `estado.json`). Render con
+  `real_time=-2` (2 fotogramas a la vez): 18,6 → 13,3 s en la prueba de 720p, idéntico (PSNR inf); con -4 no mejora en 4
+  núcleos. Presets más rápidos para el bruto no compensan (−10-15 % y ×2-×3 de tamaño). `limpiar` (sin `--confirmar`
+  solo enseña; con el episodio listo).
+
 ## Pendiente
 1. **Una vez, en el PC**: actualizar `C:\Users\Carlos\Estudio` (mejor como clon de git) y abrir Claude Code ahí. Después
    `node cli.js config "D:\Datos\Videos\Dos Tipos Promedio Podcast\Episodios\2026-10-03" --tomar-de-raiz`
@@ -172,4 +207,7 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
 5. En el primer episodio con todo esto: ver en el PC que salen el aviso de Windows y el modo despierto, que la
    revisión llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no, `disimularCortes.segundos`).
 6. (Opcional) Aviso en el móvil: instalar ntfy y poner el tema en `avisos.ntfy` del `episodio.json` del equipo.
-7. Plano doble en intercambios rápidos, rótulos con el nombre, color base por cámara, quitar ruido (opción `quitarRuido`, sin probar), clips cortos verticales.
+7. En el primer episodio con lo nuevo: preguntar los nombres de los rótulos y el pie de YouTube (equipo); ver en la
+   revisión cómo quedan el plano doble y los rótulos; mirar `estado` tras el render (tiempos por fase) para decidir si
+   subir `render.hilos`; comprobar que no salen avisos ⚠ de cámara en material bueno.
+8. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy, por el centro).

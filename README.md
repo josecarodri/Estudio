@@ -171,6 +171,11 @@ en la forma de onda de cada pista (o usa «sincronizar por audio»).
   y el audio suena más natural. Sin auriculares, déjalo desmarcado para evitar eco.
 - La **grabación de la llamada** viene activada por defecto en el PC y desactivada en el iPad para no cargarlo.
 - Haz una prueba corta con la otra persona antes de la grabación real.
+- **Micro bajo**: si tu voz llega baja, sobre tu imagen sale «🎙 Tu micro llega bajo: acércate o súbele el volumen»
+  (o «satura», si recorta), y la otra persona lo ve sobre la tuya («🎙 El micro de DJ llega bajo»). Corrígelo antes
+  de grabar: al editar habría que subirlo mucho, y con él el ruido. Se mide la voz de los últimos 20 s (lo que pasa
+  claramente del ruido de fondo): «bajo» si lo normal no llega a −32 dBFS. Mientras hablas solo tú, la otra persona
+  no cuenta. Queda en el registro (`micro`) y en cada latido.
 
 ## Marcas mientras se graba
 
@@ -257,7 +262,13 @@ node cli.js importar --copiar                    # trae las sesiones del Estudio
 node cli.js analizar <carpeta>                   # propuesta de cortes (y transcripción)
 node cli.js episodio <carpeta> --solo-montaje    # proyecto para revisarlo en Kdenlive
 node cli.js episodio <carpeta> --reanudar        # render + acabado + verificación
+node cli.js youtube <carpeta>                    # subtítulos, capítulos y descripción
+node cli.js shorts <carpeta>                     # shorts verticales de los ★
+node cli.js limpiar <carpeta> --estudio          # qué se puede borrar ya (con --confirmar, lo borra)
 ```
+
+Además cubre con la otra cámara los tramos en que una se congela o se queda en negro, pone a los dos en pantalla
+partida cuando la conversación va y viene deprisa, y el nombre de cada uno la primera vez que sale.
 
 Hace falta **ffmpeg** y, para renderizar, **Kdenlive** (trae `melt`). Para transcribir, whisper.cpp (opcional). Con
 Claude Code, el skill `/episodio` lleva el proceso entero. Detalles: [`edicion/README.md`](edicion/README.md); estado

@@ -40,6 +40,19 @@ const CONFIG_POR_DEFECTO = {
   disimularCortes: { activo: true, segundos: 1.5, minimo: 0.6 },
   // Aviso al terminar lo que tarda (render, análisis…): en Windows y, si se pone un tema de ntfy, en el móvil.
   avisos: { activo: true, windows: true, ntfy: '', minimoSegundos: 60 },
+  // Render: cuántos fotogramas a la vez hace melt (1 = de uno en uno, como antes). Con 2, ~30 % más rápido.
+  render: { hilos: 2 },
+  // Rótulo con el nombre de cada uno la primera vez que se le ve solo (a partir del segundo `desde`),
+  // `segundos` en pantalla. Sin nombres no se pone ninguno: { "jc": "José Carlos", "dj": "Douglas" }.
+  rotulos: { activo: true, nombres: {}, segundos: 4, desde: 3 },
+  // Plano doble en los intercambios rápidos: si se suceden `planos` planos de menos de `corto` segundos,
+  // en ese tramo se ve a los dos a la vez, cada uno en su mitad. `izquierda`: quién va a la izquierda.
+  planoDoble: { activo: true, corto: 2.5, planos: 3, minimo: 3, izquierda: 'jc' },
+  // Cámara congelada, en negro o sin imagen: esos tramos se cubren con la otra cámara. `congelada` y
+  // `negro`: segundos que tiene que durar para contar; `tolerancia`: diferencia entre imágenes que aún es «quieta».
+  camaras: { activo: true, congelada: 4, negro: 2, tolerancia: 0.0003 },
+  // YouTube: el texto fijo del final de la descripción (enlaces a las plataformas, redes…) y las etiquetas.
+  youtube: { pie: '', etiquetas: [] },
   // Tramos a quitar siempre, en segundos del reloj de la llamada: [["2:02", "2:34"]].
   cortes: [],
   // Limpieza de un micro en un tramo: [{ persona: "jc", desde: 640, hasta: 730 }].
@@ -78,7 +91,7 @@ const CONFIG_POR_DEFECTO = {
  * episodio.json de la carpeta del episodio. En el de la raíz (lo que se repite cada semana) se
  * ignoran: si no, los cortes de un episodio se aplicarían también a los siguientes.
  */
-const CLAVES_DEL_EPISODIO = ['partes', 'cortes', 'limpiezas', 'mantenerPlano', 'insertar', 'alFinal'];
+const CLAVES_DEL_EPISODIO = ['partes', 'cortes', 'limpiezas', 'mantenerPlano', 'insertar', 'alFinal', 'capitulos', 'titulo', 'resumen', 'shorts'];
 
 /* Lo que se escribe al crear un episodio: su episodio.json, de momento sin cortes. */
 const PLANTILLA_EPISODIO = { cortes: [], partes: {} };

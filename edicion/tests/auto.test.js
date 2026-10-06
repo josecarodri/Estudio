@@ -169,6 +169,34 @@ test('estado: una línea con la fase y avisa si el proceso ya no está', () => {
   assert.match(AU.estado(ep).texto, /se interrumpió/);
 });
 
+test('estado: cuánto tardó cada fase la última vez (no cuenta lo de un proceso anterior ni el «ya está»)', () => {
+  const ep = path.join(tmp(), 'e');
+  const r = { montaje: path.join(ep, 'montaje') };
+  const f = path.join(r.montaje, 'estado.json');
+  // Hace como si la fase en curso hubiera empezado hace `s` segundos.
+  const atras = (s) => {
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(f, JSON.stringify({ ...j, inicioFase: new Date(Date.now() - s * 1000).toISOString() }));
+  };
+  AU.marcarFase(r, 'montando-parte-1');
+  atras(200);
+  AU.marcarFase(r, 'renderizando');
+  atras(42 * 60);
+  AU.marcarFase(r, 'acabado');
+  atras(30);
+  AU.marcarFase(r, 'listo');
+  atras(3600);
+  AU.marcarFase(r, 'listo');   // el «ya está» no cuenta como trabajo
+  assert.match(AU.estado(ep).texto, /\ntiempos de la última vez: montando-parte-1 3 min · renderizando 42 min · acabado 30 s \(total 46 min\)$/);
+  // Otro proceso empieza de cero: la fase que dejó a medias el anterior no se cuenta.
+  const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+  fs.writeFileSync(f, JSON.stringify({ ...j, fase: 'renderizando', pid: 99999999 }));
+  AU.marcarFase(r, 'renderizando');
+  atras(65);
+  AU.marcarFase(r, 'listo');
+  assert.match(AU.estado(ep).texto, /tiempos de la última vez: renderizando 65 s$/);
+});
+
 test('coincidencia: proporción de palabras esperadas que se oyen', () => {
   assert.strictEqual(AU.coincidencia(['Gracias', 'por', 'escucharnos'], 'gracias por escucharnos gracias'), 1);
   assert.strictEqual(AU.coincidencia(['uno', 'dos', 'tres', 'cuatro'], 'uno dos'), 0.5);

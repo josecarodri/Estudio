@@ -1666,6 +1666,19 @@ test('analizar: las marcas puestas en vivo (✂ y ★) salen en la propuesta, en
     fs.rmSync(raiz, { recursive: true, force: true });
   });
 
+/* Una frase como la deja Whisper: un token por palabra (con su espacio delante), repartidos en el tramo. */
+function fraseWhisper(desde, hasta, texto) {
+  const palabras = texto.split(' ');
+  const paso = (hasta - desde) / palabras.length;
+  return {
+    offsets: { from: desde * 1000, to: hasta * 1000 },
+    text: ` ${texto}`,
+    tokens: palabras.map((w, i) => ({ text: ` ${w}`, offsets: { from: (desde + i * paso) * 1000, to: (desde + (i + 0.9) * paso) * 1000 } })),
+  };
+}
+
+const segundosSrt = (x) => x.replace(',', '.').split(':').map(Number).reduce((s, v) => s * 60 + v, 0);
+
 test('episodio monta una sesión con caída del anfitrión hasta el proyecto (sin renderizar)',
   { skip: HAY_FFMPEG ? false : 'hace falta ffmpeg' }, () => {
     const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'kdenlive-episodio-'));
@@ -1674,7 +1687,13 @@ test('episodio monta una sesión con caída del anfitrión hasta el proyecto (si
     SESION.retomar(SESION.generar(originales, { duracion: 60, turnos: TURNOS_LARGOS }), { caida: 25, vuelta: 32, llamada: true });
     // Marcas puestas en vivo (un ✂ que no se aprueba y un ★) y un corte a mano en mitad de un turno de dj.
     sesionConMarcas(originales, [{ tipo: 'corte', inicio: 10, fin: 18, nombre: 'JC' }, { tipo: 'bueno', hora: 50, nombre: 'DJ' }]);
-    fs.writeFileSync(path.join(ep, 'episodio.json'), JSON.stringify({ partes: { 1: { cortes: [[42, 45, 'prueba']] } } }));
+    fs.writeFileSync(path.join(ep, 'episodio.json'), JSON.stringify({
+      partes: { 1: { cortes: [[42, 45, 'prueba']] } },
+      titulo: 'Episodio de prueba',
+      resumen: 'Hablamos de Japón.',
+      capitulos: [{ titulo: 'Intro' }, { titulo: 'Japón', frase: 'hablemos ahora de japon' }, { titulo: 'Despedida', frase: 'y para terminar' }],
+      rotulos: { nombres: { jc: 'JC', dj: 'Douglas' } },
+    }));
     const res = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'episodio', ep, '--solo-montaje'],
       { encoding: 'utf8', timeout: 600000 });
     assert.equal(res.status, 0, res.stdout + res.stderr);
@@ -1687,6 +1706,18 @@ test('episodio monta una sesión con caída del anfitrión hasta el proyecto (si
     // 60 s menos los 3 s del corte a mano: si el hueco de la caída se recortara como silencio, quedarían unos 46.
     assert.ok(total > 51, `el hueco de la caída no se recorta como silencio: DJ siguió hablando (${total.toFixed(1)} s)`);
     assert.match(res.stdout, /no se corta .* en el micro de dj hay [\d.]+ s de voz/);
+    // Rótulos con el nombre de cada uno, en V3, sobre un plano suyo.
+    assert.match(res.stdout, /rótulos: .*JC en .*Douglas en|rótulos: .*Douglas en .*JC en/);
+    for (const [persona, clip] of [['jc', 'rotulo_jc'], ['dj', 'rotulo_dj']]) {
+      const ro = receta.edit.find((e) => e.clip === clip);
+      assert.ok(ro && ro.track === 3, clip);
+      const debajo = receta.edit.find((e) => !e.audioTrack && !(e.track > 1) && e.at <= ro.at && ro.at + ro.duration <= e.at + e.duration);
+      assert.strictEqual(CUT.personaDeClip(debajo && debajo.clip), persona);
+    }
+    // Las cámaras se revisan (congelada, en negro): estas se mueven todo el rato y no salta nada.
+    assert.match(res.stdout, /buscando imagen congelada o en negro en dj_camara\.mp4/);
+    assert.doesNotMatch(res.stdout, /⚠ .*cámara de/);
+    assert.ok(fs.existsSync(path.join(ep, 'montaje', 'camaras.json')));
 
     // El corte a mano cae en mitad de un turno de dj: tras el empalme se ve un momento a jc, no un salto en dj.
     assert.match(res.stdout, /saltos de imagen: 1 disimulado/);
@@ -1711,6 +1742,42 @@ test('episodio monta una sesión con caída del anfitrión hasta el proyecto (si
       assert.match(fs.readFileSync(path.join(ep, 'montaje', 'revision.md'), 'utf8'), /\| \d+ \| [\d:]+ \| corte: prueba \(−3 s\)/);
       const otraVez = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'revision', ep], { encoding: 'utf8', timeout: 600000 });
       assert.match(otraVez.stdout, /reutilizados/, 'si no cambia nada, no se renderiza otra vez');
+    }
+
+    // YouTube, con una transcripción conocida: subtítulos y capítulos en el tiempo del vídeo final (lo de
+    // después del corte a mano se adelanta 3 s y lo cortado no sale).
+    fs.writeFileSync(path.join(ep, 'montaje', 'transcripcion-parte-1.json'), JSON.stringify({ transcription: [
+      fraseWhisper(8, 11, 'Hola a todos, bienvenidos al podcast.'),
+      fraseWhisper(20, 23, 'Hablemos ahora de Japón.'),
+      fraseWhisper(42.5, 44.5, 'Esto se quitó.'),
+      fraseWhisper(50, 53, 'Y para terminar, muchas gracias.'),
+    ] }));
+    const yt = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'youtube', ep], { encoding: 'utf8', timeout: 600000 });
+    assert.equal(yt.status, 0, yt.stdout + yt.stderr);
+    const origen = Number(JSON.parse(fs.readFileSync(path.join(ep, 'montaje', 'parte-1', 'multicam.json'), 'utf8')).origenReferencia) || 0;
+    const srt = fs.readFileSync(path.join(ep, 'entrega', '2026-10-10.srt'), 'utf8');
+    const cue = (texto) => segundosSrt(srt.split('\n\n').find((b) => b.includes(texto)).split('\n')[1].split(' --> ')[0]);
+    assert.ok(Math.abs(cue('Hablemos ahora') - (20 - origen)) < 0.05, `${origen}\n${srt}`);
+    assert.ok(Math.abs(cue('Y para terminar') - (50 - 3 - origen)) < 0.1, `${origen}\n${srt}`);
+    assert.doesNotMatch(srt, /Esto se quitó/);
+    const desc = fs.readFileSync(path.join(ep, 'entrega', '2026-10-10.descripcion.txt'), 'utf8');
+    const reloj = (s) => `0:${String(Math.floor(s)).padStart(2, '0')}`;
+    assert.strictEqual(desc, `Hablamos de Japón.\n\nCapítulos:\n0:00 Intro\n${reloj(20 - origen)} Japón\n${reloj(47 - origen)} Despedida\n`);
+    const md = fs.readFileSync(path.join(ep, 'entrega', 'youtube.md'), 'utf8');
+    assert.match(md, /## Título\nEpisodio de prueba/);
+    assert.match(md, /Falta el pie con los enlaces/);
+    assert.match(fs.readFileSync(path.join(ep, 'entrega', 'transcripcion.txt'), 'utf8'), /Hablemos ahora de Japón\./);
+
+    // Un short vertical de la ★ que marcó DJ a los 50 s (corto, para que la prueba no tarde), con subtítulos.
+    if (HAY_MELT) {
+      const sh = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'shorts', ep, '--antes', '6', '--despues', '3'], { encoding: 'utf8', timeout: 600000 });
+      assert.equal(sh.status, 0, sh.stdout + sh.stderr);
+      const corto = path.join(ep, 'entrega', 'shorts', '2026-10-10-short-1.mp4');
+      const [w, h, segundos] = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=width,height:format=duration',
+        '-of', 'csv=p=0', corto], { encoding: 'utf8' }).stdout.trim().split(/[,\n]/).map(Number);
+      assert.deepStrictEqual([w, h], [1080, 1920]);
+      assert.ok(segundos > 4 && segundos < 12, `dura ${segundos} s`);
+      assert.match(fs.readFileSync(path.join(ep, 'entrega', 'shorts', 'shorts.md'), 'utf8'), /★ de DJ .*«.*para terminar/);
     }
 
     // Repetirlo no rehace el análisis ni la llamada unida.

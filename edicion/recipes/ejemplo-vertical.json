@@ -10,9 +10,9 @@
   "timeline": { "name": "Vertical v1" },
   "tracks": { "video": 2, "audio": 2 },
   "edit": [
-    { "clip": "a", "in": "00:00:10:00", "out": "00:00:22:00", "zoom": 1.9, "tilt": 40, "fadeIn": "0.5s" },
-    { "clip": "b", "in": "00:00:02:00", "duration": "3s", "zoom": 1.9, "dissolve": "0.4s" },
-    { "clip": "a", "in": "00:01:30:00", "out": "00:01:42:00", "zoom": 1.9, "tilt": 40, "dissolve": "0.4s", "fadeOut": "1s" }
+    { "clip": "a", "in": "00:00:10:00", "out": "00:00:22:00", "zoom": 3.16, "tilt": 40, "fadeIn": "0.5s" },
+    { "clip": "b", "in": "00:00:02:00", "duration": "3s", "zoom": 3.16, "dissolve": "0.4s" },
+    { "clip": "a", "in": "00:01:30:00", "out": "00:01:42:00", "zoom": 3.16, "tilt": 40, "dissolve": "0.4s", "fadeOut": "1s" }
   ],
   "guides": [
     { "at": "00:00:12:00", "name": "corte a b-roll", "color": "Red" }

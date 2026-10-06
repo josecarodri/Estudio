@@ -31,6 +31,11 @@ const AU = require('./auto.js');
 const LL = require('./llamadas.js');
 const RV = require('./revision.js');
 const AV = require('./avisos.js');
+const YT = require('./youtube.js');
+const CAM = require('./camaras.js');
+const RO = require('./rotulos.js');
+const SH = require('./shorts.js');
+const LI = require('./limpieza.js');
 
 function exists(p) {
   try {
@@ -311,7 +316,8 @@ function compositingThatLoads(preferred) {
     fs.writeFileSync(tmp, xml);
     // Un productor de color es infinito: sin terminate_on_pause y sin tiempo
     // máximo esta sonda no acabaría nunca.
-    const res = spawnSync(melt, [tmp, '-consumer', 'null', 'terminate_on_pause=1'],
+    const [cmd, ...previos] = M.comandoMelt(melt);
+    const res = spawnSync(cmd, [...previos, tmp, '-consumer', 'null', 'terminate_on_pause=1'],
       { encoding: 'utf8', timeout: 20000 });
     fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
     if (res.error) return { service: candidates[0], checked: false };
@@ -452,7 +458,7 @@ function explainRenderLog(log) {
 function cmdRender(args) {
   const file = args._[0];
   if (!file) {
-    console.error('uso: node cli.js render <receta.json|proyecto.kdenlive> [--out video.mp4]');
+    console.error('uso: node cli.js render <receta.json|proyecto.kdenlive> [--out video.mp4] [--hilos 2]');
     return 2;
   }
   const melt = buscarBinario('melt');
@@ -496,6 +502,10 @@ function cmdRender(args) {
     'ab=192k',
     'movflags=+faststart',
   ];
+  // Varios fotogramas a la vez (lo que en Kdenlive es el procesamiento en paralelo): con 2, un 28 % menos
+  // en las pruebas y el mismo resultado imagen a imagen. --hilos 1 lo desactiva.
+  const hilos = Math.max(1, Math.round(Number(args.flags.hilos) || 2));
+  if (hilos > 1) consumer.push(`real_time=-${hilos}`);
 
   console.log(`\nrenderizando a ${out} ...`);
   /*
@@ -505,7 +515,8 @@ function cmdRender(args) {
    */
   const logFile = path.join(os.tmpdir(), `melt-${process.pid}-${Date.now()}.log`);
   const logFd = fs.openSync(logFile, 'w');
-  const res = spawnSync(melt, [projectFile, '-consumer', ...consumer], {
+  const [cmdMelt, ...previos] = M.comandoMelt(melt);
+  const res = spawnSync(cmdMelt, [...previos, projectFile, '-consumer', ...consumer], {
     stdio: ['ignore', logFd, logFd],
     timeout: Number(args.flags.timeout) > 0 ? Number(args.flags.timeout) * 1000 : 8 * 3600000,
   });
@@ -1289,7 +1300,7 @@ function cmdEpisodio(args) {
   const carpeta = args._[0];
   if (!carpeta) {
     console.error('uso: node cli.js episodio <carpeta> [--solo-montaje] [--reanudar] [--recortar] [--rehacer] [--sin-silencios]');
-    console.error('                [--sin-acabado] [--sin-verificar] [--usar-proyecto | --descartar-cambios]');
+    console.error('                [--sin-acabado] [--sin-verificar] [--sin-camaras] [--usar-proyecto | --descartar-cambios]');
     console.error('     node cli.js episodio nuevo <raiz>');
     return 2;
   }
@@ -1388,6 +1399,37 @@ function cmdEpisodio(args) {
       console.log(`  plano fijo: ${segundosAReloj(desde)} → ${segundosAReloj(hasta)}`);
     }
 
+    // Hasta dónde tiene imagen cada archivo de cámara (para no ponerla donde ya, o aún, no la hay).
+    const fps = Number(receta.project.fps);
+    const origen = Number(receta.origenReferencia) || 0;
+    const fotogramas = {};
+    if (M.hasFfprobe()) {
+      for (const m of receta.media) {
+        if (!m.id.startsWith('cam_')) continue;
+        const p = M.probe(m.path, null);
+        if (p && p.seconds) fotogramas[m.id] = Math.floor(p.seconds * fps);
+      }
+    }
+    // Cámara congelada, en negro o sin imagen: esos tramos se cubren con la otra cámara (ver camaras.js).
+    // Antes de sacar los tramos que se copian (alFinal, insertar), para que tampoco salga en ellos.
+    let vetos = {};
+    let cubiertos = [];
+    const cc = { ...CAM.POR_DEFECTO, ...(config.camaras || {}) };
+    if (cc.activo !== false && !args.flags['sin-camaras']) {
+      const pc = CAM.problemasDeCamaras(receta, { cache: path.join(r.montaje, 'camaras.json'), opciones: cc, log: (t) => console.log(`  ${t}`) });
+      for (const e of pc.errores) console.log(`  aviso   no se pudo revisar la imagen de ${e}`);
+      if (pc.problemas.length) {
+        const c = CUT.cubrirCamaras(receta, pc.problemas, { fotogramas, minimo: (config.disimularCortes || {}).minimo });
+        receta = c.receta;
+        vetos = c.vetos;
+        cubiertos = c.cubiertos;
+        for (const x of cubiertos) {
+          console.log(`  ⚠ ${segundosAReloj(origen + x.desde / fps)} → ${segundosAReloj(origen + x.hasta / fps)} ${CAM.textoDeCamara(x, fps)}`
+            + `${x.visto && (!x.con || x.quedan) ? ' (revísalo en Kdenlive)' : ''}`);
+        }
+      }
+    }
+
     // Tramos a quitar: los que se marcan a mano y los silencios largos.
     // Los cortes pueden ser tiempos ["10:27","12:55"] o texto { "desde": "frase", "hasta": "frase" } (se buscan en la transcripción).
     const tramos = AU.resolverCortesTexto(cfg.cortes, parte, r.montaje).map((x) => {
@@ -1406,8 +1448,7 @@ function cmdEpisodio(args) {
       if (s.error) {
         console.log(`  aviso   no se pudieron buscar silencios: ${s.error}`);
       } else {
-        const origen = Number(receta.origenReferencia) || 0;
-        const fin = origen + CUT.duracionFrames(receta) / Number(receta.project.fps);
+        const fin = origen + CUT.duracionFrames(receta) / fps;
         const dentro = s.tramos.filter((t) => t.hasta > origen && t.desde < fin);
         // La llamada puede callar mientras alguien habla (si se cortó): se comprueba en los micros.
         const conf = config.silencios.confirmarEnMicros === false ? { quedan: dentro, descartados: [] } : AU.confirmarSilencios(receta, dentro);
@@ -1450,25 +1491,34 @@ function cmdEpisodio(args) {
     // Saltos de imagen: si a los dos lados de un corte (o de la unión con la parte anterior) se ve a la
     // misma persona, se pone un momento la cámara del otro. Se hace en la receta sin cortar, en sincronía.
     const dc = config.disimularCortes || {};
+    const fijos = (cfg.mantenerPlano || []).map((t) => [
+      tiempoASegundos(t[0], `mantenerPlano de la parte ${parte.id}`), tiempoASegundos(t[1], `mantenerPlano de la parte ${parte.id}`)]);
     if (dc.activo !== false && (tramos.length || personaAntes)) {
-      const fps = Number(receta.project.fps);
-      const fotogramas = {};
-      for (const m of receta.media) {
-        if (!m.id.startsWith('cam_') || !M.hasFfprobe()) continue;
-        const p = M.probe(m.path, null);
-        if (p && p.seconds) fotogramas[m.id] = Math.floor(p.seconds * fps);
-      }
-      const fijos = (cfg.mantenerPlano || []).map((t) => [
-        tiempoASegundos(t[0], `mantenerPlano de la parte ${parte.id}`), tiempoASegundos(t[1], `mantenerPlano de la parte ${parte.id}`)]);
-      const d = CUT.disimularSaltos(receta, tramos, { segundos: dc.segundos, minimo: dc.minimo, fijos, personaAntes, fotogramas });
+      const d = CUT.disimularSaltos(receta, tramos, { segundos: dc.segundos, minimo: dc.minimo, fijos, personaAntes, fotogramas, vetos });
       receta = d.receta;
       if (d.disimulados || d.absorbidos) {
         console.log(`  saltos de imagen: ${d.disimulados} disimulado(s) con el plano del otro`
           + `${d.absorbidos ? `, ${d.absorbidos} plano(s) de un instante absorbido(s)` : ''}`);
       }
     }
+    // Lo que se va a cortar, en frames de la receta sin cortar: una guía de algo que cae entero ahí no se pone.
+    const cortesF = CUT.unirTramos(tramos.map((t) => ({ desde: Math.round((t.desde - origen) * fps), hasta: Math.round((t.hasta - origen) * fps) })));
+    const seCorta = (a, b) => cortesF.some((x) => x.desde <= a && b <= x.hasta);
+    // Plano doble en los intercambios rápidos: los dos a la vez, cada uno en su mitad (ver cortes.planoDoble).
+    const pd = config.planoDoble || {};
+    if (pd.activo !== false) {
+      const d = CUT.planoDoble(receta, { ...pd, fijos, fotogramas, vetos });
+      if (d.dobles.length) {
+        const s = (f) => Math.round(f / fps);
+        const guias = d.dobles.filter((x) => !seCorta(x.desde, x.hasta)).map((x) => ({ at: x.desde, name: `◫ plano doble (${s(x.hasta - x.desde)} s)`, color: 'Blue' }));
+        receta = { ...d.receta, guides: [...(d.receta.guides || []), ...guias] };
+        console.log(`  plano doble: ${d.dobles.length} intercambio(s) rápido(s), ${s(d.dobles.reduce((n, x) => n + x.hasta - x.desde, 0))} s en total`
+          + ` (${d.dobles[0].izquierda} a la izquierda)`);
+      }
+    }
     // Una guía en cada empalme («✂ motivo (−4,2 s)»): se ven en Kdenlive y las usa el vídeo de revisión.
     if (tramos.length) receta = { ...receta, guides: [...(receta.guides || []), ...CUT.guiasDeCortes(receta, tramos)] };
+    if (cubiertos.length) receta = { ...receta, guides: [...(receta.guides || []), ...CAM.guiasDeCamaras(cubiertos, fps, cortesF)] };
 
     const antes = CUT.duracionFrames(receta);
     if (tramos.length) {
@@ -1493,6 +1543,23 @@ function cmdEpisodio(args) {
   const nombre = path.basename(r.base);
   let unida = reanudar ? readJson(recetaUnida) : CUT.unirRecetas(recetas, nombre);
   for (const a of agregados) unida = CUT.agregarAlFinal(unida, [a.tramo], a.prefijo);
+  // Rótulos con el nombre de cada uno, la primera vez que se le ve solo (si están los nombres: ver rotulos.js).
+  const ro = config.rotulos || {};
+  if (!reanudar && ro.activo !== false && ro.nombres && Object.keys(ro.nombres).length) {
+    const fpsU = Number(unida.project.fps);
+    const lista = [];
+    for (const [persona, texto] of Object.entries(ro.nombres)) {
+      const h = RO.hacerRotulo(String(texto), {
+        dir: path.join(r.montaje, 'rotulos'), ancho: Number(unida.project.width), alto: Number(unida.project.height), fps: fpsU, segundos: ro.segundos || 4,
+      });
+      if (h.error) console.log(`aviso   no se pudo hacer el rótulo de ${persona}: ${h.error}`);
+      else lista.push({ persona, archivo: h.archivo });
+    }
+    const c = RO.colocarRotulos(unida, lista, { segundos: ro.segundos || 4, desde: ro.desde ?? 3 });
+    unida = c.receta;
+    if (c.puestos.length) console.log(`rótulos: ${c.puestos.map((x) => `${ro.nombres[x.persona]} en ${segundosAReloj(x.at / fpsU)}`).join(' · ')}`);
+    for (const p of c.sinSitio) console.log(`aviso   no hay un plano de ${p} solo de ${(ro.segundos || 4) + 1} s para su rótulo`);
+  }
   if (!reanudar) fs.writeFileSync(recetaUnida, `${JSON.stringify(unida, null, 2)}\n`, 'utf8');
   const dur = CUT.duracionFrames(unida) / Number(unida.project.fps);
   console.log(`\nepisodio: ${partes.length} parte(s) unidas · ${(dur / 60).toFixed(1)} min · ${recetaUnida}`);
@@ -1534,7 +1601,7 @@ function cmdEpisodio(args) {
 
   const bruto = path.join(r.montaje, 'episodio-bruto.mp4');
   AU.marcarFase(r, 'renderizando', `${(dur / 60).toFixed(1)} min de vídeo`);
-  const c = cmdRender({ ...args, _: [usarProyecto ? proyecto : recetaUnida], flags: { ...args.flags, out: bruto, crf: 14 } });
+  const c = cmdRender({ ...args, _: [usarProyecto ? proyecto : recetaUnida], flags: { ...args.flags, out: bruto, crf: 14, hilos: (config.render || {}).hilos } });
   if (c !== 0) { AU.marcarFase(r, 'error', 'falló el render'); AV.ponerResumen('falló el render (mira la consola)'); return c; }
   // verificar compara la duración con la receta, salvo si se renderizó el proyecto retocado a mano.
   fs.writeFileSync(path.join(r.montaje, 'episodio-bruto.origen'), usarProyecto ? 'proyecto\n' : 'receta\n', 'utf8');
@@ -1553,6 +1620,18 @@ function cmdEpisodio(args) {
   const p = M.hasFfprobe() ? M.probe(final, null) : null;
   console.log(`\nlisto para YouTube: ${final}${a.codificador ? ` (vídeo con ${a.codificador})` : ''}`);
   if (p) console.log(`  ${p.width}x${p.height} · ${p.seconds.toFixed(1)} s · ${(fs.statSync(final).size / 1048576).toFixed(0)} MB`);
+  // Subtítulos, capítulos y descripción, si ya están las transcripciones (las hace `analizar`). No con el proyecto
+  // retocado a mano: sus tiempos ya no son los de la receta, de la que sale el mapa del montaje.
+  if (usarProyecto) {
+    console.log('  YouTube: no se prepara solo (se renderizó el proyecto retocado en Kdenlive y sus tiempos no son los de la receta)');
+  } else {
+    try {
+      const y = paqueteYoutube(r, config, { transcribirSiFalta: false });
+      if (y) console.log(`  YouTube: ${y.subtitulos} subtítulos, ${y.capitulos.length} capítulos → entrega/youtube.md${y.faltan.length ? ` (falta ${y.faltan.length} cosa(s))` : ''}`);
+    } catch (e) {
+      console.log(`  aviso   lo de YouTube no se pudo preparar: ${e.message}`);
+    }
+  }
   // Comprobación automática del resultado (principio, final, sonido, duración)..
   if (!args.flags['sin-verificar']) {
     AU.marcarFase(r, 'verificando');
@@ -1773,7 +1852,7 @@ function cmdRevision(args) {
     dir: path.join(r.montaje, 'revision'),
     salida: path.join(r.montaje, 'revision.mp4'),
     md: path.join(r.montaje, 'revision.md'),
-    melt,
+    melt: M.comandoMelt(melt),
     media: byId,
     compositing: compositingThatLoads().service,
     docVersion: elegirFormato(args.flags['doc-version']).docVersion,
@@ -1798,6 +1877,207 @@ revisión lista: ${path.join(r.montaje, 'revision.mp4')} (${segundosAReloj(res.s
   AU.marcarFase(r, 'revision-lista', `${res.trozos} trozos, ${mb} MB`);
   AV.ponerResumen(`revisión lista: ${res.trozos} trozos, ${segundosAReloj(res.segundos)} (montaje/revision.mp4)`);
   return 0;
+}
+
+/*
+ * Lo de YouTube, con los tiempos del vídeo final: subtítulos (.srt), la transcripción del vídeo final, un
+ * índice corto para elegir capítulos y la descripción (resumen, capítulos y el pie del equipo con los
+ * enlaces). Hace falta el montaje (episodio --solo-montaje) y la transcripción de cada parte (si falta, la
+ * hace). Los capítulos, el título y el resumen van en el episodio.json del episodio. Ver youtube.js.
+ */
+function cmdYoutube(args) {
+  const carpeta = args._[0];
+  if (!carpeta) { console.error('uso: node cli.js youtube <carpeta-del-episodio>'); return 2; }
+  const r = EP.rutas(carpeta);
+  const { config } = EP.cargarConfig(r.base);
+  const y = paqueteYoutube(r, config, { transcribirSiFalta: true });
+  console.log(`subtítulos: entrega/${y.nombre}.srt (${y.subtitulos})`);
+  console.log(`capítulos: ${y.capitulos.length ? y.capitulos.map((c) => `${segundosAReloj(Math.floor(c.t))} ${c.titulo}`).join(' · ') : 'ninguno todavía'}`);
+  for (const a of y.avisos) console.log(`  aviso   ${a}`);
+  if (y.faltan.length) console.log(`falta: ${y.faltan.join('; ')}`);
+  console.log(`listo: entrega/youtube.md (y transcripcion.txt, indice.md, ${y.nombre}.descripcion.txt)`);
+  AV.ponerResumen(`YouTube: ${y.subtitulos} subtítulos, ${y.capitulos.length} capítulos${y.faltan.length ? ` · falta ${y.faltan.length} cosa(s)` : ''}`);
+  return 0;
+}
+
+/*
+ * Escribe en entrega/ lo de YouTube. Sin `transcribirSiFalta`, si a alguna parte le falta la
+ * transcripción devuelve null (así `episodio` lo deja hecho solo cuando ya se transcribió con `analizar`).
+ */
+/*
+ * El montaje final y lo que se dice en él, con los tiempos del vídeo final: { final, partes, mapa,
+ * transcripciones, palabras }. Lo usan `youtube` y `shorts`. Sin `transcribirSiFalta`, si a alguna parte
+ * le falta la transcripción devuelve null.
+ */
+function textoDelMontaje(r, config, { transcribirSiFalta }) {
+  const finalFile = path.join(r.montaje, 'episodio.json');
+  if (!exists(finalFile)) throw new Error('no hay montaje: ejecuta primero  node cli.js episodio <carpeta> --solo-montaje');
+  const final = readJson(finalFile);
+  const partes = EP.agruparPartes(r.originales);
+  const recetas = [];
+  const transcripciones = [];
+  for (const parte of partes) {
+    const multicam = path.join(r.montaje, `parte-${parte.id}`, 'multicam.json');
+    if (!exists(multicam)) throw new Error(`falta ${multicam}: vuelve a montar con  node cli.js episodio <carpeta> --solo-montaje`);
+    recetas.push({ indice: Number(parte.id), receta: readJson(multicam) });
+    const base = path.join(r.montaje, `transcripcion-parte-${parte.id}`);
+    if (!exists(`${base}.json`)) {
+      if (!transcribirSiFalta) return null;
+      console.log(`parte ${parte.id}: transcribiendo (≈10 min por hora de audio)…`);
+      AU.marcarFase(r, `transcribiendo-parte-${parte.id}`);
+      const t = TR.transcribir(AU.llamadaDe(parte, r.montaje), base, config);
+      if (t.error) throw new Error(`no se pudo transcribir la parte ${parte.id}: ${t.error}`);
+    }
+    transcripciones.push({ indice: Number(parte.id), palabras: YT.palabrasConPuntuacion(`${base}.json`) });
+  }
+  const mapa = YT.mapaDelMontaje(final, recetas);
+  const palabras = YT.palabrasFinales(mapa, transcripciones);
+  if (!palabras.length) throw new Error('la transcripción no tiene nada dentro del montaje');
+  return { final, partes, mapa, transcripciones, palabras };
+}
+
+function paqueteYoutube(r, config, { transcribirSiFalta }) {
+  const texto0 = textoDelMontaje(r, config, { transcribirSiFalta });
+  if (!texto0) return null;
+  const { mapa, transcripciones, palabras } = texto0;
+  const nombre = path.basename(r.base);
+  fs.mkdirSync(r.entrega, { recursive: true });
+  const cues = YT.subtitulos(palabras);
+  fs.writeFileSync(path.join(r.entrega, `${nombre}.srt`), YT.aSrt(cues), 'utf8');
+  fs.writeFileSync(path.join(r.entrega, 'transcripcion.txt'), `${YT.frasesConTiempo(palabras).join('\n')}\n`, 'utf8');
+  fs.writeFileSync(path.join(r.entrega, 'indice.md'), [
+    `# Índice · ${nombre} (cada 2 min del vídeo final)`, '',
+    'Para elegir capítulos: cómo empieza cada tramo y sus palabras más repetidas. La frase exacta, en `entrega/transcripcion.txt`.', '',
+    ...YT.indice(palabras).map((l) => `- ${l}`), '',
+  ].join('\n'), 'utf8');
+
+  const cap = YT.resolverCapitulos(config.capitulos, { mapa, transcripciones });
+  const yt = config.youtube || {};
+  const texto = YT.descripcion({ resumen: config.resumen, capitulos: cap.capitulos, pie: yt.pie });
+  fs.writeFileSync(path.join(r.entrega, `${nombre}.descripcion.txt`), `${texto}\n`, 'utf8');
+  const faltan = [
+    !config.titulo && 'el título («titulo» en el episodio.json del episodio)',
+    !config.resumen && 'el resumen («resumen»)',
+    !cap.capitulos.length && 'los capítulos («capitulos», por frase: ver entrega/indice.md)',
+    !yt.pie && 'el pie con los enlaces («youtube.pie» en el episodio.json del equipo)',
+  ].filter(Boolean);
+  fs.writeFileSync(path.join(r.entrega, 'youtube.md'), [
+    `# YouTube · ${nombre}`, '',
+    '## Título', config.titulo ? String(config.titulo) : '(falta)', '',
+    '## Descripción (copiar tal cual; también en ' + `\`${nombre}.descripcion.txt\`)`, '', '```', texto || '(vacía)', '```', '',
+    ...(Array.isArray(yt.etiquetas) && yt.etiquetas.length ? ['## Etiquetas', yt.etiquetas.join(', '), ''] : []),
+    '## Archivos',
+    `- Vídeo: \`entrega/${nombre}.mp4\``,
+    `- Subtítulos: \`entrega/${nombre}.srt\` (YouTube Studio → Subtítulos → Añadir idioma: español → Subir archivo → «Con tiempos»)`,
+    '',
+    ...(faltan.length || cap.avisos.length ? ['## Pendiente', ...faltan.map((f) => `- Falta ${f}`), ...cap.avisos.map((a) => `- ${a}`), ''] : []),
+  ].join('\n'), 'utf8');
+  return { nombre, subtitulos: cues.length, capitulos: cap.capitulos, avisos: cap.avisos, faltan };
+}
+
+/*
+ * Shorts verticales (9:16) con subtítulos, sacados del montaje final: uno por cada ★ marcada al grabar
+ * (con lo de antes de la marca, que es cuando pasó lo bueno), o los que diga «shorts» en el episodio.json
+ * del episodio. Quedan en entrega/shorts/ con una lista (shorts.md). Ver shorts.js.
+ */
+function cmdShorts(args) {
+  const carpeta = args._[0];
+  if (!carpeta) {
+    console.error('uso: node cli.js shorts <carpeta-del-episodio> [--antes 40] [--despues 8]');
+    return 2;
+  }
+  const melt = buscarBinario('melt');
+  if (!melt) throw new Error('no se encontró melt (viene con Kdenlive).');
+  if (!which('ffmpeg')) throw new Error('hace falta ffmpeg.');
+  const r = EP.rutas(carpeta);
+  const { config } = EP.cargarConfig(r.base);
+  const { final, partes, mapa, palabras } = textoDelMontaje(r, config, { transcribirSiFalta: true });
+  const fps = Number(final.project.fps);
+  const total = CUT.duracionFrames(final) / fps;
+  const momentos = [];
+  for (const parte of partes) {
+    for (const m of AU.marcasEnVivo(parte, r.montaje)) {
+      if (m.tipo !== 'bueno') continue;
+      const t = YT.aFinal(mapa, Number(parte.id), m.desde)[0];
+      if (t !== undefined) momentos.push({ t, nombre: m.nombre });
+    }
+  }
+  const num = (v, d) => (v !== undefined && Number.isFinite(Number(v)) ? Number(v) : d);
+  const { rangos, avisos } = SH.rangosDeShorts({
+    entradas: config.shorts, momentos: momentos.sort((a, b) => a.t - b.t), palabras, total,
+    antes: num(args.flags.antes, 40), despues: num(args.flags.despues, 8),
+  });
+  for (const a of avisos) console.log(`aviso   ${a}`);
+  if (!rangos.length) {
+    console.log('no hay shorts que hacer: no se marcó ningún ★ al grabar y no hay «shorts» en el episodio.json del episodio.');
+    console.log('  p. ej.  "shorts": [{ "desde": "12:30", "hasta": "13:20" }, { "frase": "lo de Japón fue", "segundos": 45 }]');
+    return 0;
+  }
+  const { byId, problems } = M.probeRecipe(final, fps);
+  if (problems.length) throw new Error(`no se pueden leer los archivos del montaje: ${problems.join('; ')}`);
+  const nombre = path.basename(r.base);
+  const lista = [];
+  const compositing = compositingThatLoads().service;
+  const docVersion = elegirFormato(args.flags['doc-version']).docVersion;
+  AU.marcarFase(r, 'shorts', `${rangos.length} short(s)`);
+  for (const [i, x] of rangos.entries()) {
+    const salida = path.join(r.entrega, 'shorts', `${nombre}-short-${i + 1}.mp4`);
+    console.log(`short ${i + 1}: ${segundosAReloj(x.desde)} → ${segundosAReloj(x.hasta)} (${(x.hasta - x.desde).toFixed(0)} s) · ${x.motivo}`);
+    const res = SH.hacerShort({
+      final, media: byId, desde: x.desde, hasta: x.hasta, palabras, dir: path.join(r.montaje, 'shorts'), salida,
+      melt: M.comandoMelt(melt), compositing, docVersion,
+    });
+    if (res.error) { console.error(`  error: ${res.error}`); continue; }
+    const inicio = palabras.filter((p) => p.ini >= x.desde && p.ini < x.hasta).slice(0, 14).map((p) => p.w).join(' ');
+    lista.push(`| ${i + 1} | ${segundosAReloj(x.desde)} → ${segundosAReloj(x.hasta)} | ${res.segundos} s | ${x.motivo} | «${inicio}…» | \`${path.basename(salida)}\` |`);
+    console.log(`  listo: ${salida} (${res.subtitulos} subtítulos)`);
+  }
+  fs.mkdirSync(path.join(r.entrega, 'shorts'), { recursive: true });
+  fs.writeFileSync(path.join(r.entrega, 'shorts', 'shorts.md'), [
+    `# Shorts · ${nombre}`, '', 'Verticales (1080x1920) con subtítulos. Para subirlos: YouTube Studio → Crear → Subir vídeos (al durar 60 s o menos y ser verticales, YouTube los trata como Shorts).', '',
+    '| # | En el vídeo final | Dura | De dónde | Empieza | Archivo |', '|---|---|---|---|---|---|', ...lista, '',
+  ].join('\n'), 'utf8');
+  AU.marcarFase(r, 'shorts-listos', `${lista.length} short(s)`);
+  AV.ponerResumen(`shorts: ${lista.length} de ${rangos.length} listos (entrega/shorts/)`);
+  return lista.length === rangos.length ? 0 : 1;
+}
+
+/*
+ * Libera disco cuando el episodio ya está hecho: borra lo que se puede volver a generar (render en bruto,
+ * revisión, intermedios) y, con --estudio, las grabaciones del Estudio ya copiadas en originales/. Sin
+ * --confirmar solo dice qué borraría. Ver limpieza.js.
+ */
+function cmdLimpiar(args) {
+  const carpeta = args._[0];
+  if (!carpeta) {
+    console.error('uso: node cli.js limpiar <carpeta-del-episodio> [--estudio [carpeta]] [--confirmar] [--forzar]');
+    return 2;
+  }
+  const r = EP.rutas(carpeta);
+  if (!exists(r.montaje)) throw new Error(`no existe ${r.montaje}`);
+  const e = AU.estado(r.base);
+  if (!['listo', 'listo-con-avisos'].includes(e.fase) && !args.flags.forzar) {
+    console.error(`el episodio no está listo (fase: ${e.fase || 'ninguna'}): lo que se borra aún puede hacer falta.`);
+    console.error('  Cuando esté publicado, vuelve a ejecutarlo; o añade --forzar si sabes lo que haces.');
+    return 3;
+  }
+  const estudio = args.flags.estudio ? (typeof args.flags.estudio === 'string' ? args.flags.estudio : EP.ESTUDIO_POR_DEFECTO) : null;
+  const cosas = LI.queBorrar(r, { estudio });
+  const gb = (n) => `${(n / 1073741824).toFixed(2)} GB`;
+  if (!cosas.length) { console.log('no hay nada que limpiar.'); return 0; }
+  for (const c of cosas) console.log(`  ${gb(c.bytes).padStart(9)}  ${path.relative(path.dirname(r.base), c.ruta) || c.ruta}  · ${c.motivo}`);
+  const total = cosas.reduce((n, c) => n + c.bytes, 0);
+  if (!args.flags.confirmar) {
+    console.log(`
+se liberarían ${gb(total)}. No he borrado nada: añade --confirmar para borrarlo.`);
+    if (!estudio) console.log('(con --estudio, también las grabaciones del Estudio que ya están copiadas en originales/)');
+    return 0;
+  }
+  const b = LI.borrar(cosas);
+  for (const x of b.errores) console.error(`  no se pudo borrar ${x}`);
+  console.log(`
+liberados ${gb(b.bytes)}`);
+  return b.errores.length ? 1 : 0;
 }
 
 /* `muestra` era la versión anterior de `revision`. */
@@ -2000,6 +2280,9 @@ function usage() {
   node cli.js ajustar-audio <receta>   mueve el audio sin repetir el análisis
   node cli.js calibrar <camaras...>    mide el retardo imagen-sonido (claqueta o palmada)
   node cli.js revision <carpeta>       vídeo corto (480p) con cada empalme numerado, para revisar desde el móvil
+  node cli.js youtube <carpeta>        subtítulos .srt, capítulos y descripción con los tiempos del vídeo final
+  node cli.js shorts <carpeta>         shorts verticales con subtítulos, de los ★ marcados al grabar (o de «shorts»)
+  node cli.js limpiar <carpeta>        libera disco cuando el episodio está hecho (sin --confirmar solo lo enseña)
   node cli.js importar [<carpeta>]     trae las sesiones del Estudio a originales/ (--copiar o --mover;
                                        --descargas para cogerlas de Descargas, --sesiones id,id para elegir)
   node cli.js config <carpeta>         configuración efectiva del episodio y de dónde sale (--tomar-de-raiz)
@@ -2066,6 +2349,9 @@ function main(argv) {
     estado: cmdEstado,
     muestra: cmdMuestra,
     revision: cmdRevision,
+    youtube: cmdYoutube,
+    shorts: cmdShorts,
+    limpiar: cmdLimpiar,
     config: cmdConfig,
   };
 
@@ -2097,7 +2383,7 @@ function main(argv) {
   return codigo;
 }
 
-const COMANDOS_LARGOS = new Set(['episodio', 'analizar', 'transcribir', 'render', 'revision', 'muestra']);
+const COMANDOS_LARGOS = new Set(['episodio', 'analizar', 'transcribir', 'render', 'revision', 'muestra', 'youtube', 'shorts']);
 
 /*
  * Aviso al terminar un comando largo: en Windows y, si el episodio.json del equipo tiene un tema de ntfy,
