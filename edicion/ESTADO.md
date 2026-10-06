@@ -178,7 +178,7 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
   Las cámaras de las sesiones falsas de las pruebas se mueven todas (antes la de jc era una carta de ajuste fija).
 - **Plano doble** (`CUT.planoDoble`, `planoDoble`): 3 o más planos seguidos de menos de 2,5 s → los dos a la vez, zoom
   0,5 y ±ancho/4 (jc a la izquierda, V1; el otro en V2). Las funciones de planos (`planosDeVideo`) solo miran V1.
-- **Rótulos** (`rotulos.js`, `rotulos.nombres`): QuickTime Animation (qtrle, argb) con `drawtext` en caja y fundido
+- **Rótulos** (`rotulos.js`, `rotulos.nombres`, por defecto «JC» y «DJ»: lo eligieron ellos): QuickTime Animation (qtrle, argb) con `drawtext` en caja y fundido
   de alfa, en V3, en el primer plano de cada uno solo en que quepa. Las entradas de cada pista tienen que ir en orden
   de tiempo (si no, el montaje las toma por solapes): se ordena `edit` por `at`.
 - **qtblend necesita pantalla en Linux**: el módulo Qt de MLT 7.22 no carga sin X11 (tampoco con
@@ -207,7 +207,7 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
 5. En el primer episodio con todo esto: ver en el PC que salen el aviso de Windows y el modo despierto, que la
    revisión llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no, `disimularCortes.segundos`).
 6. (Opcional) Aviso en el móvil: instalar ntfy y poner el tema en `avisos.ntfy` del `episodio.json` del equipo.
-7. En el primer episodio con lo nuevo: preguntar los nombres de los rótulos y el pie de YouTube (equipo); ver en la
+7. En el primer episodio con lo nuevo: preguntar el pie de YouTube (equipo; los rótulos ya dicen «JC» y «DJ», decidido); ver en la
    revisión cómo quedan el plano doble y los rótulos; mirar `estado` tras el render (tiempos por fase) para decidir si
    subir `render.hilos`; comprobar que no salen avisos ⚠ de cámara en material bueno.
 8. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy, por el centro).

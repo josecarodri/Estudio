@@ -389,8 +389,8 @@ uno en su mitad (zoom 0,5; la izquierda en V1 y la derecha en V2; `izquierda`: `
 hace tras disimular los saltos, en la receta sin cortar, y no usa una cámara congelada ni toca los `mantenerPlano`.
 La revisión enseña los dos primeros. `"planoDoble": { "activo": false }` lo quita.
 
-**Rótulos con el nombre.** Con `"rotulos": { "nombres": { "jc": "José", "dj": "Douglas" } }` en la configuración
-del equipo, la primera vez que se ve a cada uno solo (desde el segundo `desde`, 3, en un plano en que quepa entero)
+**Rótulos con el nombre.** Con `"rotulos": { "nombres": { "jc": "JC", "dj": "DJ" } }` (lo que eligieron ellos, ya por
+defecto; se cambia en la configuración del equipo), la primera vez que se ve a cada uno solo (desde el segundo `desde`, 3, en un plano en que quepa entero)
 sale su nombre abajo a la izquierda `segundos` (4), con fundido. Cada rótulo es un vídeo con transparencia
 (QuickTime Animation, `montaje/rotulos/`) hecho con ffmpeg y va en la pista V3: en Kdenlive se mueve o se quita como
 cualquier clip. Sin nombres no se pone ninguno.

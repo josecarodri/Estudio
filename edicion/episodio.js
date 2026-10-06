@@ -43,8 +43,8 @@ const CONFIG_POR_DEFECTO = {
   // Render: cuántos fotogramas a la vez hace melt (1 = de uno en uno, como antes). Con 2, ~30 % más rápido.
   render: { hilos: 2 },
   // Rótulo con el nombre de cada uno la primera vez que se le ve solo (a partir del segundo `desde`),
-  // `segundos` en pantalla. Sin nombres no se pone ninguno: { "jc": "José Carlos", "dj": "Douglas" }.
-  rotulos: { activo: true, nombres: {}, segundos: 4, desde: 3 },
+  // `segundos` en pantalla. Los nombres los decidieron ellos (2026-10): «JC» y «DJ».
+  rotulos: { activo: true, nombres: { jc: 'JC', dj: 'DJ' }, segundos: 4, desde: 3 },
   // Plano doble en los intercambios rápidos: si se suceden `planos` planos de menos de `corto` segundos,
   // en ese tramo se ve a los dos a la vez, cada uno en su mitad. `izquierda`: quién va a la izquierda.
   planoDoble: { activo: true, corto: 2.5, planos: 3, minimo: 3, izquierda: 'jc' },
