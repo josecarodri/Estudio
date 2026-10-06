@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "project": { "name": "Mi primer corte", "fps": 30, "width": 1920, "height": 1080 },
+  "media": [
+    { "id": "intro", "path": "/ruta/a/tus/videos/clip-01.mp4" },
+    { "id": "medio", "path": "/ruta/a/tus/videos/clip-02.mp4" }
+  ],
+  "timeline": { "name": "Corte 1" },
+  "edit": [
+    { "clip": "intro", "in": "00:00:03:00", "out": "00:00:08:00", "fadeIn": "0.5s" },
+    { "clip": "medio", "in": "00:00:12:00", "duration": "4s", "dissolve": "0.5s" },
+    { "clip": "intro", "in": "00:01:05:00", "out": "00:01:10:00", "dissolve": "0.5s", "fadeOut": "1s" }
+  ],
+  "guides": [
+    { "at": "00:00:05:00", "name": "revisar audio", "color": "Yellow" }
+  ]
+}

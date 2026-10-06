@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "notes": "Montaje rapido: cortes cortos, uno al doble de velocidad y encadenados cortos.",
+  "project": { "name": "Ritmo", "fps": 25, "width": 1920, "height": 1080 },
+  "media": [
+    { "id": "a", "path": "/ruta/a/tus/videos/toma-a.mp4" },
+    { "id": "b", "path": "/ruta/a/tus/videos/toma-b.mp4" }
+  ],
+  "timeline": { "name": "Ritmo v1" },
+  "edit": [
+    { "clip": "a", "in": "00:00:05:00", "duration": "1.5s", "fadeIn": "0.3s" },
+    { "clip": "b", "in": "00:00:01:00", "duration": "1s" },
+    { "clip": "a", "in": "00:00:20:00", "duration": "2s", "speed": 2, "audio": false },
+    { "clip": "b", "in": "00:00:08:00", "duration": "2s", "dissolve": "0.3s", "fadeOut": "0.5s" }
+  ]
+}

@@ -5,6 +5,9 @@ graba en cada dispositivo, **en local y en alta calidad**, su propia cámara y s
 los cortes de la llamada). Al mismo tiempo se graba **la llamada** como referencia. Todo se sube al PC mientras grabas y
 queda listo para sincronizar en tu editor de vídeo.
 
+Este repo trae también **el editor del podcast** (`edicion/`): toma lo grabado y monta el episodio en **Kdenlive**, sin
+abrir el programa, hasta el vídeo final para YouTube. Ver [Edición del podcast](#edición-del-podcast-edicion).
+
 ## Cómo funciona
 
 ```
@@ -40,8 +43,8 @@ pide a 30 fps como mucho (si la cámara lo admite): el montaje va a 30, y a 60 s
 
 Al descargarlos desde **Grabaciones**, los archivos llegan con la sesión delante del nombre
 (`2026-10-10_21-30-05_ana_camara.mp4`): si bajas varias sesiones a la misma carpeta no se confunden. Para editar en
-este mismo PC no hace falta descargarlos: el editor (`node cli.js importar --copiar`, en el repo `Personal`) los
-copia directamente de `grabaciones/`, con su `session.json`.
+este mismo PC no hace falta descargarlos: el editor (`edicion/`, con `node cli.js importar --copiar`) los copia
+directamente de `grabaciones/`, con su `session.json`.
 
 > **¿Usas Windows?** Sigue la guía paso a paso [INSTALAR-WINDOWS.md](INSTALAR-WINDOWS.md): se instala y se
 > arranca con doble clic, sin escribir comandos.
@@ -227,6 +230,27 @@ páginas de cada persona escriben ahí, con la hora:
 
 Ajustes opcionales en `.env`: `GRACIA_MS` (45000), `PINGS_SIN_RESPUESTA` (3 pings de 15 s) y `LOGS_DIR`.
 
+## Edición del podcast (`edicion/`)
+
+El editor monta el episodio a partir de lo que se grabó aquí: importa cada sesión de `grabaciones/` como una parte,
+sincroniza cámaras y micros con la llamada, corta a quien habla, quita los silencios largos y lo que se marque, escribe
+el proyecto de **Kdenlive** (sin abrir el programa) y lo renderiza con `melt` hasta el vídeo final para YouTube
+(−14 LUFS, H.264). Las caídas se resuelven solas: los tramos retomados (`jc-2_…`) se juntan con su persona y una
+llamada partida se une en una.
+
+```
+cd edicion
+node cli.js episodio nuevo                       # carpeta del episodio de hoy
+node cli.js importar --copiar                    # trae las sesiones del Estudio
+node cli.js analizar <carpeta>                   # propuesta de cortes (y transcripción)
+node cli.js episodio <carpeta> --solo-montaje    # proyecto para revisarlo en Kdenlive
+node cli.js episodio <carpeta> --reanudar        # render + acabado + verificación
+```
+
+Hace falta **ffmpeg** y, para renderizar, **Kdenlive** (trae `melt`). Para transcribir, whisper.cpp (opcional). Con
+Claude Code, el skill `/episodio` lleva el proceso entero. Detalles: [`edicion/README.md`](edicion/README.md); estado
+y decisiones: [`edicion/ESTADO.md`](edicion/ESTADO.md).
+
 ## Estructura
 
 ```
@@ -241,7 +265,9 @@ public/js/uploader.js    Guardado local + subida en orden con reintentos
 public/js/clock.js       Reloj común
 public/js/pcm-worklet.js Captura de audio WAV con inicio exacto
 tools/alinear.js         Alineado, corrección de deriva y conversión con ffmpeg
-tests/                   Pruebas (npm test)
+tests/                   Pruebas de la grabación (npm test pasa también las de edicion/tests)
+edicion/                 Editor del podcast: montaje en Kdenlive, render y acabado (ver edicion/README.md)
+.claude/skills/episodio/ Proceso fijo para editar un episodio con Claude Code
 ```
 
 Variables (en `.env` o en el entorno): `PORT` (8080), `HTTPS_PORT` (8443), `GRABACIONES_DIR`, `PUBLIC_URL`, `PUBLICO` (`cloudflare`/`tailscale`), `CLAVE_ACCESO`, `PUBLIC_PORT` (8090),

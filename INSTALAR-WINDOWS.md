@@ -14,19 +14,20 @@ en Safari.
 
 ## 2. Descargar Estudio
 
-1. Entra en https://github.com/josecarodri/Estudio (el Estudio tiene su propio repositorio; ya no está dentro de
-   `Personal`). Comprueba que arriba a la izquierda, en el botón de la rama, pone **`main`**.
+1. Entra en https://github.com/josecarodri/Estudio (ahí está todo lo del podcast: la grabación y el editor).
+   Comprueba que arriba a la izquierda, en el botón de la rama, pone **`main`**.
 2. Pulsa el botón verde **Code → Download ZIP**.
 3. Antes de descomprimir: clic derecho sobre el ZIP → **Propiedades** → marca **Desbloquear** (abajo) → **Aceptar**.
    Así Windows no bloqueará los archivos de doble clic.
-4. Clic derecho → **Extraer todo…** y elige dónde. El editor del podcast la busca en `C:\Users\Carlos\Estudio`: si la
-   pones en otro sitio, díselo con la variable `ESTUDIO_GRABACIONES` (o con `importar --estudio <carpeta>`).
+4. Clic derecho → **Extraer todo…** y elige dónde (lo habitual: `C:\Users\Carlos\Estudio`). El editor del podcast
+   viene dentro, en la carpeta `edicion`, y coge las grabaciones de la carpeta `grabaciones` de aquí mismo.
 5. Entra en la carpeta extraída (se llama `Estudio-main`; puedes renombrarla a `Estudio`). En esta guía, «la carpeta
    del Estudio» es esa. Todo lo demás se hace desde ahí.
 
 > **Para actualizar** a una versión nueva: si la descargaste con git, `git pull` en esa carpeta. Si fue en ZIP,
 > descarga el nuevo y copia sus archivos encima: tus `grabaciones`, `.env`, `certs` y `logs` no vienen en el ZIP y
-> no se tocan.
+> no se tocan. Si editas los episodios con Claude Code, mejor tenerla con git
+> (`git clone https://github.com/josecarodri/Estudio`): así Claude puede guardar y subir sus cambios.
 
 ## 3. Instalar (una sola vez)
 
