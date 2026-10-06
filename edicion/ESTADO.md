@@ -196,6 +196,25 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
   núcleos. Presets más rápidos para el bruto no compensan (−10-15 % y ×2-×3 de tamaño). `limpiar` (sin `--confirmar`
   solo enseña; con el episodio listo).
 
+## Revisión externa (2026-10-06)
+Otra IA revisó `main` (561cbcb) y encontró cuatro fallos; los cuatro se reprodujeron y se arreglaron, cada uno con su prueba
+(que falla con el código de antes):
+- **Alineador (`tools/alinear.js`) y tramos retomados**: buscaba el pitido de inicio en los primeros 20 s de cada pista;
+  si alguien volvía poco antes de parar, encontraba el de CIERRE y recortaba y adelantaba el tramo al principio. Ahora,
+  en una pista que empezó después del pitido de inicio (`retomada`, `tarde`, o su `startedAtServer`), no se busca: la
+  sitúa el pitido de cierre (exacto; la hora de los metadatos lleva el retraso de la red) o, si no lo hay, los metadatos.
+- **Sin WAV de alguien** (`multicam.buildRecipe`): se anunciaba que se usaba el audio de la cámara, pero solo para elegir
+  plano; en el montaje esa persona quedaba muda. Ahora su cámara va también como audio continuo (`video: false`),
+  igualado a −16 LUFS como un micro.
+- **«Descargar copia» sin IndexedDB** (`public/js/uploader.js`): los trozos en memoria se sueltan al subirse y la copia
+  salía vacía o sin principio. Ahora `copia()` da el archivo entero si está todo, avisa si ya está todo en el servidor, o
+  da el resto con la cabecera del vídeo (el primer trozo ya no se suelta) y el nombre `…resto-<bytes en el servidor>`;
+  `juntar-copia` lo pega exacto detrás de lo del servidor (sin repetir lo que el servidor llegó a tener; con un hueco, no
+  junta). El editor no toma esas copias por otra cámara. Comprobado en Chromium sin IndexedDB.
+- **Turnos con micros desequilibrados** (`multicam.detectTurns`): comparaba niveles absolutos, y un micro bajo no ganaba
+  nunca al ruido de uno alto. Ahora cada micro se mide respecto a su nivel típico de voz (percentil 90 de lo que pasa del
+  ruido, aunque hable poco: si no, una interrupción corta suya contaba como muy fuerte).
+
 ## Pendiente
 1. **Una vez, en el PC**: actualizar `C:\Users\Carlos\Estudio` (mejor como clon de git) y abrir Claude Code ahí. Después
    `node cli.js config "D:\Datos\Videos\Dos Tipos Promedio Podcast\Episodios\2026-10-03" --tomar-de-raiz`

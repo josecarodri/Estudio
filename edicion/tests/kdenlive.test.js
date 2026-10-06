@@ -509,6 +509,26 @@ test('detectTurns sigue los turnos de palabra', () => {
   assert.deepEqual(bordes, [0, 7, 14, 20]);
 });
 
+test('detectTurns con un micro bajo y otro ruidoso: cada uno se compara con su propia voz, no en absoluto', () => {
+  // dj habla bajo (unos −40 dB) con un micro limpio y oye un poco a jc; jc habla fuerte pero su micro tiene el
+  // ruido de fondo a −30 dB, por encima de la voz de dj. Comparando en absoluto, dj no salía nunca.
+  const binHz = 100;
+  const bins = 30 * binHz;
+  const hace = (tramos, voz, ruido, eco = []) => {
+    const env = new Float64Array(bins).fill(ruido);
+    for (const [[a, b], nivel] of [...tramos.map((t) => [t, voz]), ...eco]) {
+      for (let i = a * binHz; i < b * binHz; i += 1) env[i] = Math.max(env[i], nivel * (0.5 + 0.5 * Math.abs(Math.sin(i / 7))));
+    }
+    return env;
+  };
+  const turnos = MC.detectTurns([
+    { id: 'dj', envelope: hace([[0, 7], [14, 20]], 0.01, 0.0005, [[[7, 14], 0.002], [[20, 30], 0.002]]), offsetBins: 0 },
+    { id: 'jc', envelope: hace([[7, 14], [20, 30]], 0.4, 0.03), offsetBins: 0 },
+  ], { binHz, fromBin: 0, toBin: bins, minShot: 2, confirm: 0.5 });
+  assert.deepEqual(turnos.map((t) => t.id), ['dj', 'jc', 'dj', 'jc']);
+  assert.deepEqual(turnos.map((t) => Math.round(t.startBin / binHz)), [0, 7, 14, 20]);
+});
+
 test('detectTurns respeta la duración mínima de plano', () => {
   const binHz = 100;
   const bins = 20 * binHz;
@@ -611,6 +631,28 @@ test('buildRecipe corta a quien habla y deja el audio continuo', () => {
     assert.equal(a.duration, Math.round(12 * 25), 'y cubre todo el montaje');
   }
   assert.equal(recipe.tracks.audio, 2);
+});
+
+test('buildRecipe: si de alguien falta el micro, va el sonido de su cámara (entero, solo el audio)', () => {
+  const binHz = 100;
+  const sesion = (probeDj) => MC.buildRecipe({
+    people: [{ id: 'dj', cam: '/v/dj_camara.mp4' }, { id: 'jc', cam: '/v/jc_camara.mp4', mic: '/v/jc_audio.wav' }],
+    offsets: { '/v/dj_camara.mp4': 4, '/v/jc_camara.mp4': 0.6, '/v/jc_audio.wav': 1.2 },
+    probes: { '/v/dj_camara.mp4': { width: 1920, height: 1080, ...probeDj } },
+    turns: [{ startBin: 4 * binHz, endBin: 10 * binHz, id: 'dj' }, { startBin: 10 * binHz, endBin: 16 * binHz, id: 'jc' }],
+    fps: 25, binHz, fromBin: 4 * binHz, toBin: 16 * binHz,
+    ganancias: { '/v/dj_camara.mp4': 6 },
+  });
+  const r = sesion({ hasAudio: true });
+  assert.deepEqual(R.validate(r).errors, []);
+  const audio = r.edit.filter((c) => c.audioTrack);
+  assert.deepEqual(audio.map((c) => [c.clip, c.video, c.at, c.duration, c.gain]), [
+    ['mic_jc', undefined, 0, 12 * 25, undefined],
+    ['cam_dj', false, 0, 12 * 25, 6],          // el sonido de la cámara de dj, todo el montaje, igualado
+  ]);
+  assert.equal(r.tracks.audio, 2);
+  // Una cámara sin sonido no sirve: esa persona no tiene voz que poner (y no se inventa nada).
+  assert.deepEqual(sesion({ hasAudio: false }).edit.filter((c) => c.audioTrack).map((c) => c.clip), ['mic_jc']);
 });
 
 test('los planos nunca se pisan, caigan donde caigan los turnos', () => {
@@ -1596,6 +1638,30 @@ test('multicam con la llamada partida (se cae la página del anfitrión): une lo
     const camaras = new Set(receta.edit.filter((c) => c.audio === false).map((c) => c.clip));
     assert.ok(camaras.has('cam_jc') && camaras.has('cam_jc-2') && camaras.has('cam_dj'), [...camaras].join(','));
 
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+test('multicam sin el WAV de alguien: su voz sale del sonido de su cámara y se oye en el montaje',
+  { skip: HAY_FFMPEG && HAY_MELT ? false : 'hace falta ffmpeg y melt' }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kdenlive-sinwav-'));
+    const sesion = SESION.generar(dir, { duracion: 30 });
+    fs.rmSync(sesion.rutas['dj_audio.wav']);
+    const archivos = Object.entries(sesion.rutas).filter(([n]) => n !== 'dj_audio.wav').map(([, ruta]) => ruta);
+    const salida = path.join(dir, 'salida');
+    const res = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'multicam', ...archivos, '--out', salida], { encoding: 'utf8', timeout: 600000 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.match(res.stdout, /micro \(falta, se usa el de la cámara\)/);
+    const receta = JSON.parse(fs.readFileSync(path.join(salida, 'multicam.json'), 'utf8'));
+    assert.deepEqual(R.validate(receta).errors, []);
+    assert.ok(receta.edit.some((e) => e.audioTrack && e.clip === 'cam_dj' && e.video === false), JSON.stringify(receta.edit.filter((e) => e.audioTrack)));
+    // Renderizado, en un turno de dj (del 14 al 20 de la sesión; el montaje empieza cuando arranca la cámara
+    // de dj, a los 4,4 s) se le oye. Antes ahí solo estaba el micro de jc, que calla: silencio.
+    const video = path.join(dir, 'montaje.mp4');
+    const rr = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'render', path.join(salida, 'multicam.json'), '--out', video], { encoding: 'utf8', timeout: 600000 });
+    assert.equal(rr.status, 0, rr.stdout + rr.stderr);
+    const nivel = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-ss', '10.5', '-t', '4', '-i', video, '-vn', '-af', 'volumedetect', '-f', 'null', '-'],
+      { encoding: 'utf8' }).stderr.match(/mean_volume: (-?[\d.]+) dB/);
+    assert.ok(nivel && Number(nivel[1]) > -40, `nivel medio en el turno de dj: ${nivel && nivel[1]} dB`);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

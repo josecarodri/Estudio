@@ -159,7 +159,9 @@
             if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
             this.acked = seq + 1;
             this.bytesAcked += this.sizes.get(seq) || blob.size;
-            this.memory.delete(seq);
+            // En memoria (sin IndexedDB) lo subido se suelta, salvo el primer trozo: lleva la cabecera del vídeo,
+            // y sin ella una copia de lo que aún no se ha subido no se podría abrir.
+            if (seq !== 0) this.memory.delete(seq);
           } else {
             const r = await fetch('/api/tracks/finish', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -196,25 +198,66 @@
       this._kick();
     }
 
-    /** Reconstruye el archivo completo desde el dispositivo (copia de seguridad). */
-    async toBlob() {
-      const parts = [];
+    /*
+     * Copia de seguridad desde este dispositivo: { blob, nombre, aviso } o solo { aviso } si no hay nada que copiar.
+     * Con IndexedDB está todo y sale el archivo entero. Sin él (o con el disco lleno) los trozos van en memoria y
+     * se sueltan al subirse: lo ya subido no está aquí, así que la copia es el resto (lo que aún no tiene el
+     * servidor), con la cabecera para que se pueda abrir, y se dice desde qué minuto empieza. Nunca da un archivo
+     * vacío ni con huecos sin decirlo.
+     */
+    async copia() {
+      const trozos = [];
+      const faltan = [];
       for (let i = 0; i < this.count; i++) {
         const b = await this._getChunk(i);
-        if (b) parts.push(b);
+        if (b) trozos.push({ i, b }); else faltan.push(i);
       }
+      if (!trozos.length && !this.count) return { aviso: 'Esta pista no tiene nada grabado.' };
+      if (!faltan.length) return { blob: this._armar(trozos.map((t) => t.b)), nombre: this.fileName() };
+      // Cada trozo es ~1 s de grabación: el número de trozo dice el minuto.
+      const minuto = (n) => `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+      const subidos = Math.max(this.acked, this.ackedPrevio || 0);
+      const perdidos = faltan.filter((i) => i >= subidos).length;
+      const resto = trozos.filter((t) => t.i >= subidos);
+      const huecos = perdidos ? ` Faltan ${perdidos} s que no llegaron a guardarse en ningún sitio.` : '';
+      if (!resto.length) {
+        return { aviso: `${subidos >= this.count ? 'Ya está todo en el servidor: no hace falta copia.' : 'En este dispositivo no queda nada sin subir.'}${huecos}` };
+      }
+      // Cuántos bytes tiene ya el servidor: va en el nombre, para juntar la copia con lo suyo sin huecos ni repetidos.
+      const local = new Map(trozos.map((t) => [t.i, t.b.size]));
+      let enServidor = 0;
+      for (let i = 0; i < subidos; i++) enServidor += this.sizes.get(i) ?? local.get(i) ?? NaN;
+      const partes = resto.map((t) => t.b);
+      if (this.info.format !== 'wav') {
+        const primero = trozos.find((t) => t.i === 0);
+        const c = primero && resto[0].i !== 0 ? await cabecera(primero.b) : null;
+        if (c) partes.unshift(c);
+      }
+      return {
+        blob: this._armar(partes),
+        nombre: this.fileName(Number.isFinite(enServidor) ? enServidor : 'resto'),
+        aviso: `Hasta el minuto ${minuto(subidos)} ya está en el servidor: esta copia lleva el resto, desde ahí. Guárdala: al editar se junta con lo del servidor.${huecos}`,
+      };
+    }
+
+    _armar(parts) {
       const type = this.info.format === 'wav' ? 'audio/wav' : (this.info.mime || '').split(';')[0];
       if (this.info.format === 'wav' && this.info.sampleRate) {
         const dataBytes = parts.reduce((a, b) => a + b.size, 0);
-        parts.unshift(wavHeader(this.info.sampleRate, this.info.channels || 1, dataBytes));
+        parts = [wavHeader(this.info.sampleRate, this.info.channels || 1, dataBytes), ...parts];
       }
       return new Blob(parts, { type });
     }
 
-    fileName() {
+    /**
+     * Nombre del archivo de la copia. Con `resto` (lo que ya tenía el servidor, en bytes) es el de una copia que
+     * solo lleva lo que falta: «…_camara.resto-123456.mp4» (edicion: juntar-copia).
+     */
+    fileName(resto) {
       const ext = this.info.format === 'wav' ? 'wav' : ((this.info.mime || '').includes('mp4') ? 'mp4' : 'webm');
       const who = (this.info.name || 'yo').replace(/[^\w-]+/g, '_');
-      return `${this.info.session}_${who}_${this.info.kind}.${ext}`;
+      const sufijo = resto === undefined ? '' : typeof resto === 'number' ? `.resto-${resto}` : '.resto';
+      return `${this.info.session}_${who}_${this.info.kind}${sufijo}.${ext}`;
     }
 
     async deleteLocal() {
@@ -234,10 +277,33 @@
       return (rows || []).map((row) => {
         const u = new TrackUploader(row.info);
         u.count = row.count; u.acked = 0; u.bytesTotal = row.bytesTotal;
+        u.ackedPrevio = row.acked || 0;   // lo que confirmó el servidor entonces (para la copia)
         u.finishInfo = row.finishInfo; u.finished = row.finished;
         return u;
       });
     }
+  }
+
+  /*
+   * La cabecera de un vídeo de MediaRecorder (lo que va antes del primer fragmento): en MP4, las cajas de primer
+   * nivel hasta el primer «moof»; en WebM, hasta el primer Cluster. null si no se encuentra.
+   */
+  async function cabecera(blob) {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let o = 0;
+    while (o + 8 <= buf.length) {
+      let tam = dv.getUint32(o);
+      const tipo = String.fromCharCode(buf[o + 4], buf[o + 5], buf[o + 6], buf[o + 7]);
+      if (tipo === 'moof') return o ? blob.slice(0, o) : null;
+      if (tam === 1 && o + 16 <= buf.length) tam = Number(dv.getBigUint64(o + 8));
+      if (tam < 8 || !/^[\x20-\x7e]{4}$/.test(tipo)) break;   // no es MP4
+      o += tam;
+    }
+    for (let i = 0; i + 4 <= buf.length; i++) {
+      if (buf[i] === 0x1f && buf[i + 1] === 0x43 && buf[i + 2] === 0xb6 && buf[i + 3] === 0x75) return i ? blob.slice(0, i) : null;
+    }
+    return null;
   }
 
   function wavHeader(sampleRate, channels, dataBytes) {
@@ -251,4 +317,5 @@
   }
 
   window.TrackUploader = TrackUploader;
+  window.TrackUploader.cabecera = cabecera;
 })();

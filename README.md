@@ -155,7 +155,8 @@ tiene cortafuegos, permite a Node.js conexiones en red privada.
    exactamente a la misma velocidad y en una hora pueden separarse decenas de milisegundos; el alineado estira o encoge
    cada pista para compensarlo. Un tramo que empezó tarde (retomado tras una caída, o de una página que se unió con la
    grabación en marcha) se coloca en su sitio con silencio y negro delante, y una pista que se cortó antes de tiempo no
-   recorta a las demás.
+   recorta a las demás. En un tramo así no se busca el pitido de inicio (no lo tiene): si alguien volvió poco antes de
+   parar, el primer pitido de su archivo es el de cierre, que es el que lo sitúa con exactitud.
 
 En las pruebas, con 120 ms de latencia simulada entre los dos, el inicio queda alineado con menos de 1 ms de
 diferencia; con una deriva exagerada de ±300 ppm (18 ms por minuto), tras corregirla quedan a ±1,5 ms.
@@ -216,7 +217,11 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
 - Si se cierra la pestaña a mitad de la subida, al volver a abrir el estudio aparece **«Grabaciones sin terminar de
   subir»** con opciones para subirlas, descargarlas o borrarlas. Lo que el servidor ya confirmó entero se borra del
   dispositivo al volver a abrir el estudio (antes se quedaba para siempre, unos 10 GB por episodio).
-- Tras grabar, cada pista tiene un botón **Descargar copia** que la reconstruye desde el dispositivo.
+- Tras grabar, cada pista tiene un botón **Descargar copia** que la reconstruye desde el dispositivo. Si el navegador no
+  deja usar IndexedDB (o se llenó el disco), los trozos van en memoria y se sueltan al subirse: entonces la copia es
+  **el resto**, lo que aún no tiene el servidor (con la cabecera del vídeo, para que se pueda abrir), y lo dice: «Hasta
+  el minuto 12:30 ya está en el servidor…». Se llama `…_camara.resto-<bytes>.mp4` y el editor la junta exacta con lo del
+  servidor (`node cli.js juntar-copia`). Si todo está ya en el servidor, lo dice y no da un archivo vacío.
 - Si el servidor se reinicia, las pistas continúan donde se quedaron (si se cayó justo entre guardar un trozo y
   apuntarlo, ese trozo no queda duplicado). Con `npm run internet` el enlace cambia: lo que el invitado tenga pendiente
   solo se puede rescatar desde su página vieja con **Descargar copia** (ver Tailscale, más arriba). Si tras el reinicio

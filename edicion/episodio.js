@@ -17,6 +17,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const { fixWavHeader } = require('../lib/core');
+
 const SUBCARPETAS = ['originales', 'montaje', 'entrega'];
 
 /*
@@ -531,7 +533,73 @@ function argumentosVideo(config, codificador) {
   return ['-c:v', 'libx264', '-preset', String(config.preset || 'medium'), '-crf', String(config.crf), '-pix_fmt', 'yuv420p'];
 }
 
+/*
+ * Dónde empieza el primer fragmento de un vídeo de MediaRecorder (lo de antes es la cabecera): en MP4, la
+ * primera caja «moof» de primer nivel; en WebM, el primer Cluster. null si no se encuentra.
+ */
+function finDeCabecera(buf) {
+  let o = 0;
+  while (o + 8 <= buf.length) {
+    let tam = buf.readUInt32BE(o);
+    const tipo = buf.toString('latin1', o + 4, o + 8);
+    if (tipo === 'moof') return o;
+    if (tam === 1 && o + 16 <= buf.length) tam = Number(buf.readBigUInt64BE(o + 8));
+    if (tam < 8 || !/^[\x20-\x7e]{4}$/.test(tipo)) break;   // no es MP4
+    o += tam;
+  }
+  const i = buf.indexOf(Buffer.from([0x1f, 0x43, 0xb6, 0x75]));
+  return i > 0 ? i : null;
+}
+
+/*
+ * Junta una copia de rescate del Estudio («…_camara.resto-123456.mp4»: la que da «Descargar copia» cuando lo
+ * primero ya se había subido) con el archivo que tiene el servidor. El número es cuántos bytes tenía el
+ * servidor al hacer la copia: el resto se pega detrás, sin su cabecera (en un WAV, se rehace la del total). Si
+ * el servidor llegó a tener parte del resto, esa parte no se repite; si le falta algo de antes, no se junta
+ * (quedaría un hueco). Devuelve { bytes } (los añadidos) o { error }.
+ */
+function juntarCopia(principal, resto, salida) {
+  const m = /\.resto-(\d+)\.(wav|mp4|webm)$/i.exec(path.basename(resto));
+  if (!m) return { error: `${path.basename(resto)} no es una copia de rescate (…resto-<bytes>.wav|mp4|webm)` };
+  const desde = Number(m[1]);
+  const wav = m[2].toLowerCase() === 'wav';
+  // Los archivos pueden ser de varios GB: no se cargan, se copian y se añade a trozos. De la copia solo hace
+  // falta el principio para saber dónde acaba su cabecera.
+  const fdResto = fs.openSync(resto, 'r');
+  try {
+    let cabecera = 44;
+    if (!wav) {
+      const inicio = Buffer.alloc(Math.min(fs.fstatSync(fdResto).size, 32 * 1048576));
+      fs.readSync(fdResto, inicio, 0, inicio.length, 0);
+      cabecera = finDeCabecera(inicio);
+      if (cabecera === null) return { error: 'la copia no tiene la cabecera de vídeo esperada' };
+    }
+    const tenia = fs.statSync(principal).size - (wav ? 44 : 0);   // lo que hay en el servidor, sin cabecera
+    if (tenia < desde) return { error: `al archivo del servidor le faltan ${desde - tenia} bytes antes de donde empieza la copia: quedaría un hueco` };
+    // Lo que el servidor llegó a tener del resto no se repite.
+    let pos = cabecera + (tenia - desde);
+    fs.copyFileSync(principal, salida);
+    const fdSalida = fs.openSync(salida, 'a');
+    let bytes = 0;
+    try {
+      const buf = Buffer.alloc(8 * 1048576);
+      for (let n; (n = fs.readSync(fdResto, buf, 0, buf.length, pos)) > 0; pos += n) {
+        fs.writeSync(fdSalida, buf, 0, n);
+        bytes += n;
+      }
+    } finally {
+      fs.closeSync(fdSalida);
+    }
+    if (wav) fixWavHeader(salida);
+    return { bytes };
+  } finally {
+    fs.closeSync(fdResto);
+  }
+}
+
 module.exports = {
+  juntarCopia,
+  finDeCabecera,
   SUBCARPETAS,
   CONFIG_POR_DEFECTO,
   CLAVES_DEL_EPISODIO,

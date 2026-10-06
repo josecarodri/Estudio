@@ -104,15 +104,20 @@ Hace cinco cosas:
    para sincronizar. Imprime lo que ha entendido, y lo que no reconoce lo dice y lo deja
    fuera en lugar de colarlo. Los tramos retomados del Estudio (`jc-2_camara`,
    `jc-2_audio`) son la misma persona que `jc`; si la llamada quedó partida
-   (`jc_llamada` + `jc-2_llamada`), une los tramos en `llamada-unida.wav` y usa esa.
+   (`jc_llamada` + `jc-2_llamada`), une los tramos en `llamada-unida.wav` y usa esa. Una copia de rescate
+   (`…_camara.resto-123456.mp4`) no se toma por otra cámara: avisa de que hay que juntarla antes (`juntar-copia`).
 2. **Sincroniza**: compara la envolvente de energía de cada archivo con la de la
    referencia para saber cuántos segundos después empezó cada uno. Da también una
    *confianza*: por debajo de 5 avisa de que no se fía, en vez de alinear mal en
    silencio.
 3. **Corta a quien habla**: compara el volumen de los dos micros y va alternando de
-   cámara. El audio de los micros **no se corta nunca**: va continuo en su pista, que es
-   lo que hace que una conversación no suene a saltos.
-4. **Iguala el nivel de los micros**: mide el volumen percibido de cada uno (EBU R128) y
+   cámara. Cada micro se compara con **su propia voz** (su nivel típico al hablar), no en
+   absoluto: si no, un micro bajo perdería siempre contra el ruido de uno alto o ruidoso y
+   a esa persona no se la vería nunca. El audio de los micros **no se corta nunca**: va
+   continuo en su pista, que es lo que hace que una conversación no suene a saltos. Si de
+   alguien falta el micro, su voz sale del **sonido de su cámara**, también continuo (para
+   elegir plano y en el montaje).
+4. **Iguala el nivel de los micros** (o del sonido de la cámara que haga de micro): mide el volumen percibido de cada uno (EBU R128) y
    le pone la ganancia que le falta para llegar a −16 LUFS. Así no hay que estar
    subiendo y bajando según quién habla.
 5. **Empareja el color de las cámaras**: mide el color medio de cada una y las acerca a
@@ -296,6 +301,7 @@ de un vistazo en la timeline por qué está cortado ahí.
 | `node cli.js youtube <carpeta>` | subtítulos `.srt`, transcripción e índice del vídeo final, y la descripción con capítulos (`entrega/youtube.md`) |
 | `node cli.js shorts <carpeta> [--antes 40] [--despues 8]` | shorts verticales con subtítulos, de los ★ marcados al grabar (o de `shorts`), en `entrega/shorts/` |
 | `node cli.js limpiar <carpeta> [--estudio] [--confirmar]` | libera disco con el episodio hecho (sin `--confirmar` solo enseña qué borraría) |
+| `node cli.js juntar-copia <archivo> <copia.resto-N.ext>` | junta una copia de rescate del Estudio (lo que no llegó al servidor) con su archivo, exacta |
 
 Opciones: `--out <archivo>`, `--doc-version 1.1|1.04`,
 `--compositing qtblend|frei0r.cairoblend|composite`, `--root <carpeta>`,

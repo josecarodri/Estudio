@@ -49,6 +49,8 @@ Todo se ejecuta desde `C:\Users\Carlos\Estudio\edicion` con `node cli.js …` (e
 - `audioOffset`, `limpiezas` y `mantenerPlano` de `jc` valen también para `jc-2`. Las `limpiezas` van en segundos de la llamada, como los cortes.
 - Probado solo con material sintético: en el primer caso real, que el usuario revise en Kdenlive el empalme jc → jc-2 y el labial de jc-2 antes de renderizar.
 - Pistas con `tarde` en `session.json` (esa página perdió la orden de grabar y empezó sola unos segundos después): no llevan pitido de inicio y se sincronizan por la voz. No hay que hacer nada.
+- Si alguien manda una **copia de rescate** (`…_camara.resto-123456.mp4`, de «Descargar copia» cuando lo primero ya se había subido), júntala con su archivo antes de montar: `node cli.js juntar-copia <originales/…/jc_camara.mp4> <copia>` (deja el de antes como `.sin-resto`). Si no, `episodio` la ignora y avisa.
+- Si a alguien le falta el micro (su WAV no llegó), se usa el sonido de su cámara: para elegir plano y también en el montaje (igualado como un micro). Avísale al usuario de que esa voz sonará peor.
 
 ## Al grabar (el Estudio: `server.js` y `public/` en la raíz de este repo)
 - Mejor el enlace fijo (Tailscale) que el de Cloudflare.

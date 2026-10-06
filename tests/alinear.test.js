@@ -72,3 +72,29 @@ test('alinear: un tramo retomado (sin pitido de inicio) va a su sitio y una pist
   assert.ok(Math.abs(duracion(out('jc_audio.wav')) - 30) < 0.1, 'la cortada conserva lo que tiene');
   assert.match(fs.readFileSync(out('LEEME.txt'), 'utf8'), /jc-2_audio\.wav .*empieza 40\.000 s después/);
 });
+
+test('alinear: un tramo retomado poco antes de parar lleva el pitido de CIERRE al principio de su archivo: no se toma por el de inicio', { skip: !hayFfmpeg }, () => {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'alinear-')), 'sesion');
+  fs.mkdirSync(dir);
+  wav(path.join(dir, 'dj_audio.wav'), 62, [1, 60]);
+  wav(path.join(dir, 'jc-2_audio.wav'), 9, [5]);          // retomó a los 55 s: el pitido de cierre (60 s) cae en su segundo 5
+  const inicio = 1_000_000;
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({
+    id: 'sesion', room: 'dtp', startAt: inicio, beepAt: inicio + 1000, endBeepAt: inicio + 60000,
+    participants: { a: { name: 'DJ', label: 'dj' }, c: { name: 'JC', label: 'jc-2', retomada: true, retomaDe: 'jc' } },
+    tracks: {
+      'a-audio': { participant: 'a', kind: 'audio', file: 'dj_audio.wav', format: 'wav', startedAtServer: inicio, beepOffsetSec: 1 },
+      // La hora de inicio que mandó la página llega 0,3 s tarde (la red): manda el pitido de cierre, que es exacto.
+      'c-audio': { participant: 'c', kind: 'audio', file: 'jc-2_audio.wav', format: 'wav', startedAtServer: inicio + 55300, beepOffsetSec: -54.3 },
+    },
+  }));
+  const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'tools', 'alinear.js'), dir, '--mantener-pitido'], { encoding: 'utf8', timeout: 120000 });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const out = (n) => path.join(dir, 'alineados', n);
+  const finDj = pitidoEn(out('dj_audio.wav'), 55);
+  const finJc2 = pitidoEn(out('jc-2_audio.wav'), 55);
+  assert.ok(Math.abs(finJc2 - finDj) < 0.01, `pitido de cierre del tramo retomado en ${finJc2}, el de dj en ${finDj}`);
+  // Con el fallo, el tramo se recortaba y se adelantaba al principio: ahí sonaba su pitido de cierre, a 1 s.
+  assert.strictEqual(pitidoEn(out('jc-2_audio.wav'), 0), null, 'empieza en silencio: no se adelantó al principio');
+  assert.match(fs.readFileSync(out('LEEME.txt'), 'utf8'), /jc-2_audio\.wav .*empieza 55\.000 s después/);
+});
