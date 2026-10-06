@@ -16,12 +16,13 @@ Todo se ejecuta desde `C:\Users\Carlos\Estudio\edicion` con `node cli.js …` (e
 
 ## Pasos (en este orden)
 1. `node cli.js episodio nuevo` → crea la carpeta de hoy con su `episodio.json`. `node cli.js importar` → lista las sesiones del Estudio de las últimas 36 h, de la más antigua a la más reciente: **cada sesión es una parte**. Avisa de pistas sin terminar de subir y de sesiones de menos de 2 min («¿una prueba?»): si sobra alguna, pregunta y elige con `--sesiones <id>,<id>`. Después `node cli.js importar --copiar` (cada sesión a `originales/<sesión>/`; `--mover` las quita del Estudio).
-2. **`node cli.js analizar <carpeta>`** (en segundo plano: transcribe, ≈10 min por hora de audio; usa `estado` para ver cómo va). Escribe `montaje/propuesta.md`: **léelo, no leas las transcripciones enteras** (son ~35 000 tokens y casi todo es contenido).
+2. **`node cli.js analizar <carpeta>`** (en segundo plano: transcribe, ≈10 min por hora de audio; usa `estado` para ver cómo va). Escribe `montaje/propuesta.md`: **léelo, no leas las transcripciones enteras** (son ~35 000 tokens y casi todo es contenido). Incluye lo marcado en vivo al grabar: los tramos ✂ salen como propuestas (se aprueban como las demás); los ★ (momentos buenos) y los ✂ sin tramo, en listas aparte con lo que se dijo justo antes.
 3. Enséñale al usuario la propuesta en pocas líneas. `node cli.js aprobar <carpeta> 1.1 2.1` pasa las que acepte al `episodio.json` del episodio.
 4. **Decide el usuario** (pregunta, no supongas): qué sobra del contenido (tangentes, partes flojas, preguntas que no funcionaron), si se corta el llanto u otra cosa, el cierre/despedida. Para cortar por contenido usa **cortes por texto** en el `episodio.json` del episodio (`{"desde":"frase","hasta":"frase"}`, se ajustan solos al silencio) en lugar de calcular tiempos a mano. Para dudas de contenido, busca la frase con `grep` en `montaje/transcripcion-parte-N.txt`.
-5. `node cli.js episodio <carpeta> --solo-montaje` → deja el proyecto `.kdenlive` (sin renderizar) para que lo revise en Kdenlive. Cambiar cortes después no repite el análisis largo (la huella lo evita) y tarda segundos.
+5. `node cli.js episodio <carpeta> --solo-montaje` → deja el proyecto `.kdenlive` (sin renderizar). Cambiar cortes después no repite el análisis largo (la huella lo evita) y tarda segundos.
+   Luego **`node cli.js revision <carpeta>`** (en segundo plano: unos minutos la primera vez, segundos si no cambió nada): deja `montaje/revision.mp4` (480p: un trozo numerado por empalme, más el principio y el final, con una barra roja en el corte) y `montaje/revision.md` (la lista). **Mándale el vídeo** (si puedes enviar archivos, envíalo; si no, dile dónde está) con la lista resumida: lo revisa en el móvil y contesta «todo bien» o «el 4 no». Los silencios recortados no salen (son automáticos); `--silencios` los añade. Si prefiere Kdenlive, el proyecto lleva una guía morada en cada empalme («✂ motivo (−N s)»), verdes los ★ y rojos los ✂ en vivo que no se cortaron.
    Si el usuario retoca y **guarda** el proyecto en Kdenlive, el siguiente `episodio` se para (código 4) en vez de pisar sus cambios. Pregúntale: `--reanudar --usar-proyecto` renderiza ese proyecto tal cual; `--descartar-cambios` lo rehace desde la receta (guarda copia). Lo que deba repetirse va mejor en `episodio.json`.
-6. Solo con el visto bueno: `node cli.js episodio <carpeta> --reanudar` (renderiza + acabado + **verificación automática**). Tarda 2-3 h para 90 min. Mira el avance con `node cli.js estado <carpeta>` (una línea); **no uses vigilantes largos**, caducan.
+6. Solo con el visto bueno: `node cli.js episodio <carpeta> --reanudar` (renderiza + acabado + **verificación automática**). Tarda 2-3 h para 90 min. El PC no se duerme mientras tanto y al terminar avisa (ver «Avisos»). Mira el avance con `node cli.js estado <carpeta>` (una línea); **no uses vigilantes largos**, caducan.
 7. `node cli.js verificar <carpeta>` si hace falta repetir la comprobación. Debe dar todo ✔.
 
 ## Ya decidido (no preguntar)
@@ -32,7 +33,8 @@ Todo se ejecuta desde `C:\Users\Carlos\Estudio\edicion` con `node cli.js …` (e
 - Inicio y fin: `auto` (voz tras el pitido de inicio; última voz antes del pitido de cierre). Sin pitido de cierre = grabación cortada: se termina donde acabe. Sin pitido de inicio (la página que graba la llamada empezó tarde) no se recorta el principio: propón un `desde` para esa parte.
 - Silencios de 4 s o más: se dejan en 1 s, **solo si los micros también callan**. Si la llamada perdió el audio de alguien, ese tramo no se corta (lo dice al montar).
 - El llamado a seguir en plataformas va en la descripción de YouTube, no en el vídeo.
-- Antes de renderizar de verdad: **siempre** que el usuario vea el proyecto en Kdenlive. Cada render cuesta más de una hora.
+- Antes de renderizar de verdad: **siempre** el visto bueno del usuario, con el vídeo de revisión o en Kdenlive. Cada render cuesta más de una hora.
+- Saltos de imagen: si en un empalme se vería a la misma persona a los dos lados (un corte o un silencio recortado en mitad de su plano, o la unión de dos partes), `episodio` pone 1,5 s la cámara del otro justo después, en sincronía, y no deja planos de un instante junto a un corte (`disimularCortes`, lo dice al montar). Respeta los `mantenerPlano`. No hace falta tocar nada.
 - Acabado con x264 `medium` (1,7 veces más rápido que `slow`, +2 % de tamaño). `"codificador": "nvenc"` en el `episodio.json` del equipo usa la tarjeta gráfica (si falla, repite solo con x264): sin probar en este PC; propónlo solo si el acabado se hace largo.
 
 ## Caídas y tramos retomados
@@ -45,6 +47,10 @@ Todo se ejecuta desde `C:\Users\Carlos\Estudio\edicion` con `node cli.js …` (e
 - Mejor el enlace fijo (Tailscale) que el de Cloudflare.
 - Mientras se graba, sobre la imagen del otro debe verse «● REC». «⚠ NO ESTÁ GRABANDO» que no se corrige solo en unos segundos: esa persona recarga la página y vuelve a grabar (sale como tramo retomado).
 - No cerrar nada hasta que las dos páginas pongan «✓ Guardado en el servidor».
+- **Marcas en vivo**: mientras se graba, ✂ (tecla C en el PC) abre un tramo para cortar y la siguiente pulsación, de cualquiera de los dos, lo cierra (si nadie lo cierra, se cierra al parar); ★ (tecla B) marca un buen momento, lo de justo antes. Quedan en `session.json` y `analizar` las convierte en propuestas. Recuérdaselo al usuario si va a grabar.
+
+## Avisos
+- Lo largo (`episodio`, `analizar`, `transcribir`, `revision`, `render`) mantiene el PC despierto mientras corre y, si tardó más de un minuto, avisa al terminar o al fallar: notificación de Windows y, si en el `episodio.json` del equipo hay `"avisos": { "ntfy": "<tema>" }`, también en el móvil (app gratuita ntfy suscrita a ese tema). El tema hace de contraseña: que sea difícil de adivinar (`dtp-` y letras al azar). Si el usuario quiere el aviso en el móvil, propón el tema y ponlo tú en la configuración del equipo.
 
 ## Trampas conocidas
 - **Whisper desfasa hasta ~0,5 s** el final de las frases y transcribe el pitido de inicio como «Bienvenidos». Para cortes finos usa la energía del audio (ya lo hace `ajustarASilencio`).

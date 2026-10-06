@@ -292,7 +292,7 @@ de un vistazo en la timeline por qué está cortado ahí.
 | `node cli.js verificar <carpeta>` | comprueba el vídeo final: duración, −14 LUFS, sin pitidos, principio y final |
 | `node cli.js estado <carpeta>` | en qué fase va el proceso, en una línea |
 | `node cli.js transcribir <carpeta>` | transcripción local con Whisper (texto con tiempos por parte) |
-| `node cli.js muestra <carpeta>` | vídeo corto con los empalmes y el color, sin renderizar todo |
+| `node cli.js revision <carpeta> [--silencios]` | vídeo corto (480p) para revisar el montaje desde el móvil: cada empalme numerado, principio y final |
 
 Opciones: `--out <archivo>`, `--doc-version 1.1|1.04`,
 `--compositing qtblend|frei0r.cairoblend|composite`, `--root <carpeta>`,
@@ -348,6 +348,25 @@ hueco. Esa es la referencia y el reloj de la parte. `analizar` marca el hueco co
 **Silencios.** Se buscan en la llamada (4 s o más, se dejan en 1 s) y se confirman en los micros: si en alguno hay
 voz, la llamada perdió audio y ese tramo no se corta.
 
+**Marcas en vivo.** Mientras se graba, en el Estudio se puede pulsar ✂ (abre un tramo para cortar; la siguiente
+pulsación, de cualquiera de los dos, lo cierra) y ★ (un buen momento: lo de justo antes). Quedan en `session.json`
+con la hora del servidor; `analizar` las pasa al reloj de la llamada (también si está partida) y convierte los ✂ en
+propuestas aprobables (empiezan 1 s antes de la pulsación) y los ★ en una lista de momentos buenos con lo que se dijo.
+En el proyecto de Kdenlive salen como guías: verdes los ★, rojos los ✂ que no se cortaron.
+
+**Saltos de imagen.** Si en un empalme (un corte, un silencio recortado, la unión de dos partes) se vería a la misma
+persona a los dos lados, la cara cambia de golpe. `episodio` pone justo después del empalme 1,5 s la cámara del otro
+(en sincronía: es su imagen de ese momento) y vuelve a quien habla; y un plano que junto a un corte quedaría de un
+instante se absorbe en el de al lado. Se hace en la receta sin cortar, solo en el vídeo, y no toca los
+`mantenerPlano` ni usa una cámara donde no tiene imagen. Se ajusta con `disimularCortes` (`segundos`, `minimo`,
+`activo: false` para no hacerlo). Cada empalme lleva además una guía morada: «✂ motivo (−N s)».
+
+**Revisión desde el móvil.** `revision <carpeta>` hace `montaje/revision.mp4` (480p): unos segundos alrededor de
+cada empalme, numerados, con el motivo escrito encima y una barra roja en el instante del corte, más el principio y
+el final del episodio y las uniones de partes; y `montaje/revision.md` con la lista y el minuto de cada uno en el
+vídeo final. Los silencios recortados solo salen con `--silencios`. Cada trozo se guarda con una huella: si no
+cambia nada, la revisión sale en segundos, y si cambia un corte solo se rehace lo que cambió.
+
 **Lo que no se repite.** La huella de cada parte (`parte-N/huella.txt`) evita repetir el análisis de cámaras si no
 cambiaron los archivos ni lo que afecta al reparto; cambiar cortes tarda segundos. `--rehacer` lo fuerza,
 `--recortar` lo evita siempre, `--reanudar` parte del montaje ya unido y salta al render.
@@ -360,6 +379,13 @@ cambios) o `--descartar-cambios` (lo rehace desde la receta y guarda una copia, 
 pasadas (pico −1 dBTP), color de acabado, H.264 crf 18 con el índice al principio. `codificador: "x264"` (preset
 `medium`) o `"nvenc"` (tarjeta gráfica; si falla, se repite solo con x264). El color de acabado y la limpieza de
 sonido no están en el `.kdenlive`: en Kdenlive se ve el montaje, no el aspecto final.
+
+**PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision` y `render` impiden que
+el PC se duerma mientras trabajan (en Windows, con un PowerShell aparte que se cierra solo al acabar) y, si tardaron
+más de `avisos.minimoSegundos` (60), avisan al terminar o al fallar: notificación de Windows y, con
+`"avisos": { "ntfy": "<tema>" }` en la configuración del equipo, también en el móvil con la app gratuita ntfy
+suscrita a ese tema (o la dirección de un servidor ntfy propio). El tema hace de contraseña: mejor uno difícil de
+adivinar.
 
 Opciones de `episodio`: `--solo-montaje`, `--reanudar`, `--recortar`, `--rehacer`, `--sin-silencios`,
 `--sin-acabado`, `--sin-verificar`, `--usar-proyecto`, `--descartar-cambios`; `episodio nuevo [<raiz>] --fecha AAAA-MM-DD`.
@@ -532,9 +558,11 @@ cortes.js      quita, inserta y une tramos en la receta (cortes, plano fijo, par
 auto.js        analizar, aprobar, verificar, estado; límites por voz, cortes por texto, huella
 analizar.js    medidas rápidas de una parte: inicio y fin de voz, charla técnica, citas → tiempos
 transcribir.js transcripción local con whisper.cpp
+revision.js    vídeo de revisión para el móvil (trozos alrededor de cada empalme)
+avisos.js      PC despierto durante lo largo y aviso al terminar (Windows y ntfy)
 recipes/       ejemplos
 tests/sesion-falsa.js   genera una sesión de prueba con desfases y turnos conocidos (y caídas)
 ```
 
 Las pruebas están en `tests/` de esta carpeta: `kdenlive.test.js`, `auto.test.js`,
-`cortes.test.js`, `episodio.test.js`, `llamadas.test.js` y `receta.test.js`.
+`cortes.test.js`, `episodio.test.js`, `llamadas.test.js`, `receta.test.js`, `revision.test.js` y `avisos.test.js`.

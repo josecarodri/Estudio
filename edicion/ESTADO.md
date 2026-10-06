@@ -135,6 +135,32 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
   funciona. La validación de recetas, que venía de ella, es ahora propia (`recipe.js`, pruebas en `receta.test.js`).
 - Pruebas: `npm test` en la raíz pasa las de la grabación y las de la edición; `npm run test:edicion`, solo estas.
 
+## Marcas en vivo, saltos disimulados, revisión desde el móvil y avisos (2026-10-06)
+- **Marcas en vivo** (Estudio + `analizar`): botones ✂ y ★ mientras se graba (teclas C y B en el PC). ✂ es un tramo
+  que se abre y se cierra (lo cierra cualquiera; si no, al parar); ★ un instante. El servidor las guarda en
+  `session.json` (`marcas`, hora del servidor) y avisa a las dos páginas. `analizar` las pasa al reloj de la llamada
+  con el `startedAtServer` de cada tramo de la llamada (y `llamada-unida.json` si está partida): los ✂ de 3 s o más
+  son propuestas aprobables (empiezan 1 s antes de la pulsación), los ★ y los ✂ más cortos salen en listas con lo
+  que se dijo justo antes. `episodio` las pone como guías (★ verde, ✂ sin cortar rojo) y avisa de los ✂ sin cortar.
+  `aprobar` deja una nota en el corte (tercer elemento: `[desde, hasta, "1.2 ✂ en vivo: marcado por JC"]`).
+- **Saltos de imagen** (`CUT.disimularSaltos`, config `disimularCortes`): en cada empalme con la misma persona a los
+  dos lados se pone 1,5 s la cámara del otro justo después, en sincronía (en la receta sin cortar), y se absorben los
+  planos de menos de 0,6 s junto a un corte. También en la unión de dos partes. Comprobado renderizando: el contador
+  de la cámara de dj salta de 37 a 42 detrás del plano de jc. Respeta `mantenerPlano` y no usa una cámara sin imagen
+  (mira su duración con ffprobe).
+- **Guías de los cortes**: cada empalme lleva «✂ motivo (−N s)» (silencio, texto, propuesta aprobada, corte a mano).
+- **Revisión desde el móvil** (`revision`, sustituye a `muestra`): `montaje/revision.mp4` en 480p con un trozo por
+  empalme (numerado, motivo encima, barra roja en el corte) más principio, final y uniones de partes, y
+  `montaje/revision.md`. Sin silencios salvo `--silencios`. Trozos de melt y rotulados guardados con huella: repetirla
+  sin cambios tarda menos de 1 s.
+- **PC despierto y avisos** (`avisos.js`): los comandos largos piden a Windows no suspender (SetThreadExecutionState
+  desde un PowerShell que se cierra al terminar el proceso) y, si tardaron 60 s o más, avisan: notificación de Windows
+  y, con `avisos.ntfy`, en el móvil. Los scripts de PowerShell se comprobaron con su analizador y la definición de C#
+  compila; falta verlos en el PC.
+- Pruebas nuevas: `tests/marcas.test.js` (servidor), avisos y textos en `tests/llamada.test.js`, y en `edicion/tests`:
+  `revision.test.js`, `avisos.test.js`, saltos en `cortes.test.js`, marcas en `auto.test.js` y de punta a punta en
+  `kdenlive.test.js` (analizar con marcas, episodio con salto disimulado, guías y revisión).
+
 ## Pendiente
 1. **Una vez, en el PC**: actualizar `C:\Users\Carlos\Estudio` (mejor como clon de git) y abrir Claude Code ahí. Después
    `node cli.js config "D:\Datos\Videos\Dos Tipos Promedio Podcast\Episodios\2026-10-03" --tomar-de-raiz`
@@ -143,4 +169,7 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
 3. Probar `"codificador": "nvenc"` en la GTX 1650: tiempo del acabado y aspecto.
 4. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
    falta: con 0 se ve y se oye bien.
-5. Plano doble en intercambios rápidos, rótulos con el nombre, color base por cámara, quitar ruido (opción `quitarRuido`, sin probar), clips cortos verticales.
+5. En el primer episodio con todo esto: ver en el PC que salen el aviso de Windows y el modo despierto, que la
+   revisión llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no, `disimularCortes.segundos`).
+6. (Opcional) Aviso en el móvil: instalar ntfy y poner el tema en `avisos.ntfy` del `episodio.json` del equipo.
+7. Plano doble en intercambios rápidos, rótulos con el nombre, color base por cámara, quitar ruido (opción `quitarRuido`, sin probar), clips cortos verticales.

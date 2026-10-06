@@ -102,3 +102,21 @@ test('indicador de la otra persona: graba, o NO graba pasados unos segundos (no 
   assert.strictEqual(L.estadoDelOtro({ hayOtro: true, yoGrabo: true, otroGraba: undefined, msGrabando: 9000 }), null,
     'sin noticias de la otra página (versión antigua) no se avisa');
 });
+
+test('marcas en vivo: avisos de ★ y de ✂ (abierto por mí o por el otro, cerrado con su duración)', () => {
+  assert.deepStrictEqual(L.avisoDeMarca({ tipo: 'bueno', nombre: 'DJ' }, { propia: true }), { texto: '★ Buen momento marcado', tipo: '' });
+  assert.strictEqual(L.avisoDeMarca({ tipo: 'bueno', nombre: 'DJ' }, { propia: false }).texto, '★ DJ marcó un buen momento');
+  const abierto = { tipo: 'corte', nombre: 'JC', inicio: 1000, fin: null };
+  assert.strictEqual(L.avisoDeMarca(abierto, { propia: true }).texto, '✂ Tramo para cortar: pulsa ✂ cuando acabe');
+  assert.strictEqual(L.avisoDeMarca(abierto, { propia: false }).texto, '✂ JC abrió un tramo para cortar: pulsa ✂ cuando acabe');
+  assert.strictEqual(L.avisoDeMarca(abierto, { propia: false }).tipo, 'warn');
+  assert.strictEqual(L.avisoDeMarca({ ...abierto, fin: 36400 }, { propia: false }).texto, '✂ Tramo para cortar cerrado (35 s)');
+  assert.strictEqual(L.avisoDeMarca(null), null);
+  assert.strictEqual(L.avisoDeMarca({ tipo: 'otra' }), null);
+});
+
+test('marcas en vivo: el botón ✂ dice si hay un tramo abierto y cuánto lleva', () => {
+  assert.strictEqual(L.textoBotonCorte(null, 5000), '✂ Cortar');
+  assert.strictEqual(L.textoBotonCorte({ inicio: 10_000, nombre: 'JC' }, 75_500), '✂ Cerrar corte 1:05');
+  assert.strictEqual(L.textoBotonCorte({ inicio: 10_000, nombre: 'JC' }, 9_000), '✂ Cerrar corte 0:00', 'un reloj algo adelantado no da negativos');
+});

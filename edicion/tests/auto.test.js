@@ -119,8 +119,8 @@ test('aprobar: pasa las propuestas elegidas al episodio.json del episodio sin du
   assert.strictEqual(r.hechos.length, 2);
   assert.strictEqual(r.destino, path.join(ep, 'episodio.json'));
   const j = JSON.parse(fs.readFileSync(path.join(ep, 'episodio.json'), 'utf8'));
-  assert.deepStrictEqual(j.partes[1].cortes, [[133.2, 186.4]]);
-  assert.deepStrictEqual(j.partes[2].cortes, [[1, 16]]);
+  assert.deepStrictEqual(j.partes[1].cortes, [[133.2, 186.4, '1.1 conexion: x']], 'con una nota de dónde sale');
+  assert.deepStrictEqual(j.partes[2].cortes, [[1, 16, '2.1 tecnica: z']]);
   assert.strictEqual(j.partes[1].hasta, 3000, 'lo que ya había se conserva');
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(raiz, 'episodio.json'), 'utf8')), { lufsEntrega: -14 }, 'la raíz no se toca');
   AU.aprobar(ep, ['1.1']);
@@ -134,7 +134,7 @@ test('aprobar: si el episodio aún no tiene su episodio.json, lo crea', () => {
   fs.mkdirSync(path.join(ep, 'montaje'), { recursive: true });
   fs.writeFileSync(path.join(ep, 'montaje', 'propuesta.json'), JSON.stringify({ partes: { 1: { marcas: [{ id: '1.1', desde: 5, hasta: 9, tipos: ['tecnica'], texto: 'x' }] } } }));
   AU.aprobar(ep, ['1.1']);
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(ep, 'episodio.json'), 'utf8')), { cortes: [], partes: { 1: { cortes: [[5, 9]] } } });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(ep, 'episodio.json'), 'utf8')), { cortes: [], partes: { 1: { cortes: [[5, 9, '1.1 tecnica: x']] } } });
   assert.ok(!fs.existsSync(path.join(raiz, 'episodio.json')));
 });
 
@@ -216,4 +216,80 @@ test('ajustar al silencio: un corte que cae en mitad de una palabra se lleva a l
   assert.strictEqual(spawnSync('ffmpeg', args).status, 0);
   const t = A.ajustarASilencio(wav, 5.3, 0.6);       // la pausa va de 5,0 a 6,0
   assert.ok(t > 5.05 && t < 5.95, `quedó en ${t}`);
+});
+
+// ------------------------------------------------------------------ marcas en vivo (botones ✂ y ★ del Estudio)
+
+/** Parte con su session.json: la llamada empezó a la hora S del servidor (y, si está partida, el tramo 2 a S2). */
+function parteConMarcas(marcas, { partida } = {}) {
+  const dir = tmp();
+  const S = 1_000_000;
+  const tracks = { a: { file: 'jc_llamada.mp4', kind: 'llamada', startedAtServer: S } };
+  if (partida) tracks.b = { file: 'jc-2_llamada.mp4', kind: 'llamada', startedAtServer: S + 40_000 };
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({ startAt: S, tracks, marcas }));
+  const archivos = ['dj_camara.mp4', 'dj_audio.wav', 'jc_camara.mp4', 'jc_audio.wav', 'jc_llamada.mp4', ...(partida ? ['jc-2_llamada.mp4'] : [])]
+    .map((n) => path.join(dir, n));
+  const montaje = path.join(dir, 'montaje');
+  if (partida) {
+    // Donde la unión colocó cada tramo: el segundo 2,5 s más tarde de lo que dicen las horas (cuenta la unión).
+    fs.mkdirSync(path.join(montaje, 'parte-1'), { recursive: true });
+    fs.writeFileSync(path.join(montaje, 'parte-1', 'llamada-unida.json'), JSON.stringify({
+      tramos: [{ archivo: archivos[4], desde: 0 }, { archivo: archivos[5], desde: 42.5 }],
+    }));
+  }
+  return { parte: { id: '1', carpeta: dir, archivos }, montaje };
+}
+
+test('marcas en vivo: pasan de la hora del servidor al reloj de la llamada', () => {
+  const S = 1_000_000;
+  const { parte, montaje } = parteConMarcas([
+    { tipo: 'bueno', hora: S + 12_340, nombre: 'DJ', persona: 'dj' },
+    { tipo: 'corte', inicio: S + 20_000, fin: S + 35_500, nombre: 'JC', persona: 'jc' },
+    { tipo: 'corte', inicio: S + 50_000, fin: S + 59_000, nombre: 'JC', persona: 'jc', cerradoAlParar: true },
+    { tipo: 'rara', hora: S },
+  ]);
+  assert.deepStrictEqual(AU.marcasEnVivo(parte, montaje), [
+    { tipo: 'bueno', desde: 12.34, hasta: 12.34, nombre: 'DJ', persona: 'dj' },
+    { tipo: 'corte', desde: 20, hasta: 35.5, nombre: 'JC', persona: 'jc', cerradoAlParar: false },
+    { tipo: 'corte', desde: 50, hasta: 59, nombre: 'JC', persona: 'jc', cerradoAlParar: true },
+  ]);
+});
+
+test('marcas en vivo: con la llamada partida, cada marca va con el tramo que grababa entonces', () => {
+  const { parte, montaje } = parteConMarcas([
+    { tipo: 'bueno', hora: 1_000_000 + 10_000, nombre: 'DJ' },
+    { tipo: 'bueno', hora: 1_000_000 + 50_000, nombre: 'DJ' },
+  ], { partida: true });
+  const m = AU.marcasEnVivo(parte, montaje);
+  assert.deepStrictEqual(m.map((x) => x.desde), [10, 52.5], 'la segunda va 10 s después del inicio del tramo 2, que está en el 42,5');
+});
+
+test('marcas en vivo: sin session.json, sin marcas o sin hora de la llamada, no hay ninguna', () => {
+  const sin = { id: '1', carpeta: tmp(), archivos: ['x/jc_llamada.mp4'] };
+  assert.deepStrictEqual(AU.marcasEnVivo(sin, null), []);
+  const { parte } = parteConMarcas([]);
+  assert.deepStrictEqual(AU.marcasEnVivo(parte, null), []);
+  const otra = parteConMarcas([{ tipo: 'bueno', hora: 1_000_000 }]);
+  const s = JSON.parse(fs.readFileSync(path.join(otra.parte.carpeta, 'session.json'), 'utf8'));
+  delete s.tracks.a.startedAtServer;
+  fs.writeFileSync(path.join(otra.parte.carpeta, 'session.json'), JSON.stringify(s));
+  assert.deepStrictEqual(AU.marcasEnVivo(otra.parte, null), []);
+});
+
+test('marcas en vivo: guías en el proyecto (★ en verde, ✂ sin cortar en rojo) y nada dentro de un corte', () => {
+  const receta = { project: { fps: 25 }, origenReferencia: 2, edit: [{ clip: 'cam_dj', at: 0, in: 0, duration: 25 * 100 }] };
+  const marcas = [
+    { tipo: 'bueno', desde: 12.34, hasta: 12.34, nombre: 'DJ' },
+    { tipo: 'bueno', desde: 41, hasta: 41, nombre: 'JC' },                 // cae dentro de un corte
+    { tipo: 'corte', desde: 20, hasta: 35.5, nombre: 'JC' },               // no se corta
+    { tipo: 'corte', desde: 40, hasta: 50, nombre: 'JC' },                 // ya se corta (aprobado)
+    { tipo: 'corte', desde: 60, hasta: 61, nombre: 'DJ' },                 // sin tramo: no lleva guía
+    { tipo: 'bueno', desde: 1, hasta: 1, nombre: 'DJ' },                   // antes del inicio del montaje
+  ];
+  const g = AU.guiasDeMarcas(receta, marcas, [{ desde: 39.8, hasta: 50.2 }]);
+  assert.deepStrictEqual(g.guias, [
+    { at: 259, name: '★ DJ', color: 'Green' },
+    { at: 450, name: '✂ JC (marcado en vivo, 16 s, sin cortar)', color: 'Red' },
+  ]);
+  assert.strictEqual(g.sinCortar, 1);
 });

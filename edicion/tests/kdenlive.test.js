@@ -21,6 +21,7 @@ const MC = require(path.join(TOOL, 'multicam.js'));
 const AN = require(path.join(TOOL, 'analisis.js'));
 const CAL = require(path.join(TOOL, 'calibrar.js'));
 const SESION = require(path.join(TOOL, 'tests', 'sesion-falsa.js'));
+const CUT = require(path.join(TOOL, 'cortes.js'));
 
 function tieneBinario(bin, flag) {
   const res = spawnSync(bin, [flag || '-version'], { encoding: 'utf8', timeout: 15000 });
@@ -1615,12 +1616,65 @@ test('analizar propone cortar el hueco en que la página del anfitrión estuvo c
     fs.rmSync(raiz, { recursive: true, force: true });
   });
 
+/*
+ * session.json como lo deja el Estudio: la hora del servidor a la que empezó cada tramo de la llamada
+ * (el primero a la hora S; el retomado, 32,6 s después) y las marcas puestas con los botones.
+ */
+function sesionConMarcas(originales, marcas) {
+  const S = 1_000_000;
+  fs.writeFileSync(path.join(originales, 'session.json'), JSON.stringify({
+    startAt: S,
+    tracks: {
+      a: { file: 'jc_llamada (1).mp4', kind: 'llamada', startedAtServer: S },
+      b: { file: 'jc-2_llamada.mp4', kind: 'llamada', startedAtServer: S + 32_600 },
+    },
+    marcas: marcas.map((m) => ({ ...m, ...(m.hora != null ? { hora: S + m.hora * 1000 } : { inicio: S + m.inicio * 1000, fin: S + m.fin * 1000 }) })),
+  }));
+}
+
+test('analizar: las marcas puestas en vivo (✂ y ★) salen en la propuesta, en el reloj de la llamada partida, y se aprueban',
+  { skip: HAY_FFMPEG ? false : 'hace falta ffmpeg' }, () => {
+    const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'kdenlive-marcas-'));
+    const ep = path.join(raiz, '2026-10-10');
+    const originales = path.join(ep, 'originales');
+    SESION.retomar(SESION.generar(originales, { duracion: 60, turnos: TURNOS_LARGOS }), { caida: 25, vuelta: 32, llamada: true });
+    sesionConMarcas(originales, [
+      { tipo: 'corte', inicio: 10, fin: 18, nombre: 'JC', persona: 'jc' },
+      { tipo: 'bueno', hora: 45, nombre: 'DJ', persona: 'dj' },          // durante el tramo retomado
+      { tipo: 'corte', inicio: 50, fin: 50.8, nombre: 'DJ', persona: 'dj' }, // dos pulsaciones seguidas
+    ]);
+    const res = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'analizar', ep, '--sin-transcribir'], { encoding: 'utf8', timeout: 600000 });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    const p = JSON.parse(fs.readFileSync(path.join(ep, 'montaje', 'propuesta.json'), 'utf8')).partes['1'];
+    const vivo = p.marcas.find((m) => m.tipos.includes('✂ en vivo'));
+    assert.ok(vivo, JSON.stringify(p.marcas));
+    // Empieza 1 s antes de la pulsación (lo que se quiere quitar ya había empezado) y los extremos van al silencio.
+    assert.ok(Math.abs(vivo.desde - 9) < 0.8 && Math.abs(vivo.hasta - 18) < 0.8, JSON.stringify(vivo));
+    assert.strictEqual(p.momentos.length, 1);
+    assert.ok(Math.abs(p.momentos[0].t - 45) < 0.4, `★ a los ${p.momentos[0].t} s de la llamada unida`);
+    assert.strictEqual(p.paraRevisar.length, 1);
+    assert.ok(Math.abs(p.paraRevisar[0].t - 50) < 0.4);
+    const md = fs.readFileSync(path.join(ep, 'montaje', 'propuesta.md'), 'utf8');
+    assert.match(md, /✂ en vivo · «marcado por JC»/);
+    assert.match(md, /★ Momentos buenos/);
+    assert.match(md, /sin tramo/);
+    const ok = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'aprobar', ep, vivo.id], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    const corte = JSON.parse(fs.readFileSync(path.join(ep, 'episodio.json'), 'utf8')).partes['1'].cortes[0];
+    assert.deepStrictEqual(corte.slice(0, 2), [vivo.desde, vivo.hasta]);
+    assert.match(corte[2], /✂ en vivo: marcado por JC/);
+    fs.rmSync(raiz, { recursive: true, force: true });
+  });
+
 test('episodio monta una sesión con caída del anfitrión hasta el proyecto (sin renderizar)',
   { skip: HAY_FFMPEG ? false : 'hace falta ffmpeg' }, () => {
     const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'kdenlive-episodio-'));
     const ep = path.join(raiz, '2026-10-10');
     const originales = path.join(ep, 'originales');
     SESION.retomar(SESION.generar(originales, { duracion: 60, turnos: TURNOS_LARGOS }), { caida: 25, vuelta: 32, llamada: true });
+    // Marcas puestas en vivo (un ✂ que no se aprueba y un ★) y un corte a mano en mitad de un turno de dj.
+    sesionConMarcas(originales, [{ tipo: 'corte', inicio: 10, fin: 18, nombre: 'JC' }, { tipo: 'bueno', hora: 50, nombre: 'DJ' }]);
+    fs.writeFileSync(path.join(ep, 'episodio.json'), JSON.stringify({ partes: { 1: { cortes: [[42, 45, 'prueba']] } } }));
     const res = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'episodio', ep, '--solo-montaje'],
       { encoding: 'utf8', timeout: 600000 });
     assert.equal(res.status, 0, res.stdout + res.stderr);
@@ -1630,8 +1684,34 @@ test('episodio monta una sesión con caída del anfitrión hasta el proyecto (si
     assert.ok(fs.existsSync(path.join(ep, 'montaje', 'episodio.kdenlive')));
     const receta = JSON.parse(fs.readFileSync(path.join(ep, 'montaje', 'episodio.json'), 'utf8'));
     const total = Math.max(...receta.edit.map((e) => e.at + e.duration)) / receta.project.fps;
-    assert.ok(total > 54, `el hueco de la caída no se recorta como silencio: DJ siguió hablando (${total.toFixed(1)} s)`);
+    // 60 s menos los 3 s del corte a mano: si el hueco de la caída se recortara como silencio, quedarían unos 46.
+    assert.ok(total > 51, `el hueco de la caída no se recorta como silencio: DJ siguió hablando (${total.toFixed(1)} s)`);
     assert.match(res.stdout, /no se corta .* en el micro de dj hay [\d.]+ s de voz/);
+
+    // El corte a mano cae en mitad de un turno de dj: tras el empalme se ve un momento a jc, no un salto en dj.
+    assert.match(res.stdout, /saltos de imagen: 1 disimulado/);
+    const video = receta.edit.filter((e) => !e.audioTrack);
+    const quien = (f) => CUT.personaDeClip((video.find((e) => e.at <= f && f < e.at + e.duration) || {}).clip);
+    const empalme = receta.guides.find((g) => (CUT.leerGuiaDeCorte(g) || {}).motivo === 'prueba');
+    assert.ok(empalme, JSON.stringify(receta.guides.filter((g) => g.name.startsWith('✂'))));
+    assert.deepStrictEqual([quien(empalme.at - 1), quien(empalme.at)], ['dj', 'jc']);
+    assert.equal(quien(empalme.at + Math.round(1.5 * receta.project.fps)), 'dj', 'y vuelve a quien habla');
+    // Las marcas en vivo quedan como guías: ★ en verde y el ✂ sin aprobar en rojo, con su aviso.
+    assert.ok(receta.guides.some((g) => g.name === '★ DJ' && g.color === 'Green'));
+    assert.ok(receta.guides.some((g) => g.name.startsWith('✂ JC (marcado en vivo') && g.color === 'Red'));
+    assert.match(res.stdout, /1 tramo\(s\) ✂ marcados en vivo NO se cortan/);
+
+    // Vídeo de revisión para el móvil (hace falta melt): un trozo por empalme, numerado, en 480p.
+    if (HAY_MELT) {
+      const rev = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'revision', ep], { encoding: 'utf8', timeout: 600000 });
+      assert.equal(rev.status, 0, rev.stdout + rev.stderr);
+      const ancho = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=width', '-of', 'csv=p=0',
+        path.join(ep, 'montaje', 'revision.mp4')], { encoding: 'utf8' }).stdout.trim();
+      assert.equal(ancho, '854');
+      assert.match(fs.readFileSync(path.join(ep, 'montaje', 'revision.md'), 'utf8'), /\| \d+ \| [\d:]+ \| corte: prueba \(−3 s\)/);
+      const otraVez = spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'revision', ep], { encoding: 'utf8', timeout: 600000 });
+      assert.match(otraVez.stdout, /reutilizados/, 'si no cambia nada, no se renderiza otra vez');
+    }
 
     // Repetirlo no rehace el análisis ni la llamada unida.
     const cli = (...extra) => spawnSync(process.execPath, [path.join(TOOL, 'cli.js'), 'episodio', ep, '--solo-montaje', ...extra],

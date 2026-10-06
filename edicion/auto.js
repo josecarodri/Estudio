@@ -52,6 +52,82 @@ function llamadaDe(parte, montaje) {
   return r.archivo;
 }
 
+/*
+ * Marcas puestas mientras se grababa con los botones del Estudio («✂ cortar», un tramo; «★ bueno», un
+ * instante), pasadas al reloj de la llamada de la parte: el de los cortes y la transcripción. Las horas
+ * del session.json son del reloj del servidor; cada pista de la llamada apunta a qué hora del servidor
+ * empezó, y si la llamada quedó partida, llamada-unida.json dice dónde va cada tramo.
+ * Devuelve [{ tipo: 'corte'|'bueno', desde, hasta, nombre, persona, cerradoAlParar }] en segundos.
+ */
+function marcasEnVivo(parte, montaje) {
+  const sesionFile = parte.carpeta ? path.join(parte.carpeta, 'session.json') : null;
+  if (!sesionFile || !existe(sesionFile)) return [];
+  let marcas;
+  try { marcas = leerJson(sesionFile).marcas; } catch { return []; }
+  if (!Array.isArray(marcas) || !marcas.length) return [];
+  const { tramos } = LL.tramosDeLlamada(parte.archivos);
+  if (!tramos.length) return [];
+  let colocados = [{ archivo: tramos[0], desde: 0 }];
+  const notas = montaje && path.join(montaje, `parte-${parte.id}`, 'llamada-unida.json');
+  if (tramos.length > 1 && notas && existe(notas)) colocados = leerJson(notas).tramos || colocados;
+  const inicios = LL.iniciosDeSesion(sesionFile);
+  const conHora = colocados.map((t) => ({ ...t, inicio: inicios[path.basename(t.archivo)] })).filter((t) => Number.isFinite(t.inicio));
+  if (!conHora.length) return [];
+  // A cada hora le corresponde el tramo que estaba grabando entonces: el último que había empezado.
+  const aLlamada = (hora) => {
+    const t = [...conHora].reverse().find((x) => x.inicio <= hora) || conHora[0];
+    return Math.max(0, Math.round((t.desde + (hora - t.inicio) / 1000) * 100) / 100);
+  };
+  const out = [];
+  for (const m of marcas) {
+    if (m && m.tipo === 'bueno' && Number.isFinite(m.hora)) {
+      const t = aLlamada(m.hora);
+      out.push({ tipo: 'bueno', desde: t, hasta: t, nombre: m.nombre || '', persona: m.persona || null });
+    } else if (m && m.tipo === 'corte' && Number.isFinite(m.inicio)) {
+      out.push({
+        tipo: 'corte', desde: aLlamada(m.inicio), hasta: aLlamada(Number.isFinite(m.fin) ? m.fin : m.inicio),
+        nombre: m.nombre || '', persona: m.persona || null, cerradoAlParar: !!m.cerradoAlParar,
+      });
+    }
+  }
+  return out.sort((a, b) => a.desde - b.desde);
+}
+
+// Un ✂ más corto que esto (dos pulsaciones seguidas) no dice qué cortar: se deja para revisar lo de justo antes.
+const CORTE_EN_VIVO_MINIMO = 3;
+
+/*
+ * Guías para el proyecto de Kdenlive a partir de las marcas en vivo: ★ en verde y, en rojo, los tramos ✂
+ * que no se van a cortar (para que se vean al revisar). Lo que cae dentro de un corte no lleva guía.
+ * `tramos` son los cortes de la parte, en segundos de la llamada. Devuelve { guias, sinCortar }.
+ */
+function guiasDeMarcas(receta, marcas, tramos) {
+  const fps = Number(receta.project.fps);
+  const origen = Number(receta.origenReferencia) || 0;
+  const fin = CUT.duracionFrames(receta);
+  const cortes = CUT.unirTramos(tramos.map((t) => ({ desde: t.desde, hasta: t.hasta })));
+  const cubierto = (desde, hasta) => cortes.reduce((s, c) => s + Math.max(0, Math.min(c.hasta, hasta) - Math.max(c.desde, desde)), 0);
+  const guias = [];
+  let sinCortar = 0;
+  for (const m of marcas) {
+    const at = Math.round((m.desde - origen) * fps);
+    if (at < 0 || at >= fin) continue;
+    if (m.tipo === 'bueno') {
+      if (cubierto(m.desde, m.desde + 0.01) === 0) guias.push({ at, name: `★ ${m.nombre}`, color: 'Green' });
+    } else if (m.hasta - m.desde >= CORTE_EN_VIVO_MINIMO && cubierto(m.desde, m.hasta) < 0.8 * (m.hasta - m.desde)) {
+      sinCortar += 1;
+      guias.push({ at, name: `✂ ${m.nombre} (marcado en vivo, ${Math.round(m.hasta - m.desde)} s, sin cortar)`, color: 'Red' });
+    }
+  }
+  return { guias, sinCortar };
+}
+
+/* Lo que se dijo entre dos instantes, según la transcripción (lo más reciente si es largo). */
+function textoEntre(segs, desde, hasta, max = 220) {
+  const t = segs.filter((s) => s.hasta > desde && s.desde < hasta).map((s) => s.texto).join(' ').replace(/\s+/g, ' ').trim();
+  return t.length > max ? `…${t.slice(-max)}` : t;
+}
+
 // ------------------------------------------------------------------ estado
 function marcarFase(r, fase, detalle) {
   try {
@@ -119,7 +195,8 @@ function resolverCortesTexto(entradas, parte, montaje) {
   let palabras = null;
   const llamada = (entradas || []).some((e) => !Array.isArray(e)) ? llamadaDe(parte, montaje) : null;
   for (const e of entradas || []) {
-    if (Array.isArray(e)) { salida.push({ tramo: e }); continue; }
+    // Un corte por tiempos puede llevar una nota detrás (["10:27", "12:55", "1.2 ✂ en vivo"]): de dónde salió.
+    if (Array.isArray(e)) { salida.push({ tramo: e, ...(typeof e[2] === 'string' ? { nota: e[2] } : {}) }); continue; }
     if (!palabras) {
       if (!existe(jsonFile)) throw new Error(`hay cortes escritos con texto pero falta la transcripción de la parte ${parte.id}. Ejecuta: node cli.js transcribir <carpeta>`);
       palabras = A.palabras(jsonFile);
@@ -240,17 +317,34 @@ function analizar(carpeta, flags) {
     total += lim.duracion || 0;
     const sil = CUT.detectarSilencios(llamada, config.silencios);
     const silencios = sil.error ? [] : sil.tramos;
-    let marcas = [];
-    if (existe(`${base}.json`)) {
-      marcas = A.candidatos(A.segmentos(`${base}.json`)).map((m) => {
-        const desde = Math.round(A.ajustarASilencio(llamada, m.desde, 0.6) * 100) / 100;
-        const hasta = Math.round(A.ajustarASilencio(llamada, m.hasta, 0.6) * 100) / 100;
-        return { desde, hasta, tipos: m.tipos, texto: m.marcas[0], contexto: m.contexto };
-      });
-    }
+    const segs = existe(`${base}.json`) ? A.segmentos(`${base}.json`) : [];
+    let marcas = A.candidatos(segs).map((m) => {
+      const desde = Math.round(A.ajustarASilencio(llamada, m.desde, 0.6) * 100) / 100;
+      const hasta = Math.round(A.ajustarASilencio(llamada, m.hasta, 0.6) * 100) / 100;
+      return { desde, hasta, tipos: m.tipos, texto: m.marcas[0], contexto: m.contexto };
+    });
     // Si la llamada quedó partida, el hueco entre tramos es el rato en que la página estuvo caída.
     for (const h of huecosDeLlamada(parte, r.montaje)) {
       marcas.push({ desde: h.desde, hasta: h.hasta, tipos: ['caida'], texto: 'hueco: se cayó la página que grababa la llamada', contexto: '' });
+    }
+    // Marcas puestas en vivo con los botones del Estudio. Los tramos ✂ son propuestas como las demás; los ★
+    // (buenos momentos) y los ✂ sin tramo se listan aparte, con lo que se dijo justo antes de la marca.
+    const momentos = [];
+    const paraRevisar = [];
+    for (const m of marcasEnVivo(parte, r.montaje)) {
+      if (m.tipo === 'bueno') {
+        momentos.push({ t: m.desde, nombre: m.nombre, texto: textoEntre(segs, m.desde - 30, m.desde + 2) });
+      } else if (m.hasta - m.desde < CORTE_EN_VIVO_MINIMO) {
+        paraRevisar.push({ t: m.desde, nombre: m.nombre, texto: textoEntre(segs, m.desde - 20, m.desde + 2) });
+      } else {
+        // Se pulsa un momento después de que empiece lo que se quiere quitar: se adelanta 1 s.
+        const desde = Math.round(A.ajustarASilencio(llamada, Math.max(0, m.desde - 1), 0.6) * 100) / 100;
+        const hasta = Math.round(A.ajustarASilencio(llamada, lim.duracion ? Math.min(m.hasta, lim.duracion) : m.hasta, 0.6) * 100) / 100;
+        marcas.push({
+          desde, hasta, tipos: ['✂ en vivo'], texto: `marcado por ${m.nombre}`, contexto: textoEntre(segs, desde, hasta), enVivo: true,
+          ...(m.cerradoAlParar ? { aviso: 'nadie lo cerró: llega hasta el final de la grabación' } : {}),
+        });
+      }
     }
     marcas = marcas.sort((a, b) => a.desde - b.desde).map((m, i) => ({ id: `${parte.id}.${i + 1}`, ...m }));
     const brillos = [];
@@ -258,17 +352,28 @@ function analizar(carpeta, flags) {
       const s = A.saltoDeBrilloInicial(cam, 45, 8);
       if (s) brillos.push({ archivo: path.basename(cam), ...s });
     }
-    propuesta.partes[parte.id] = { llamada: path.basename(llamada), duracion: lim.duracion, inicioVoz: lim.inicio, finVoz: lim.fin, pitidoInicio: !!lim.pitidoInicio, pitidoFin: !!lim.pitidoFin, silencios, marcas, brillos };
+    propuesta.partes[parte.id] = { llamada: path.basename(llamada), duracion: lim.duracion, inicioVoz: lim.inicio, finVoz: lim.fin, pitidoInicio: !!lim.pitidoInicio, pitidoFin: !!lim.pitidoFin, silencios, marcas, brillos, momentos, paraRevisar };
 
     md.push(`## Parte ${parte.id} — ${path.basename(llamada)} (${reloj(lim.duracion)})`);
     md.push(`- Inicio de voz: ${lim.inicio != null ? `${lim.inicio.toFixed(2)} s` : '— (no hay pitido inicial)'} · Final de voz: ${lim.fin != null ? `${reloj(lim.fin)}` : '— (no hay pitido de cierre: ¿se cortó la grabación?)'}`);
     md.push(`- Silencios largos (≥${config.silencios.min} s, se recortan solos): ${silencios.length}${silencios.length ? ` · ${silencios.slice(0, 6).map((s) => reloj(s.desde)).join(', ')}${silencios.length > 6 ? '…' : ''}` : ''}`);
     for (const b of brillos) md.push(`- ⚠ Cambio de brillo en ${b.archivo} a los ${b.t.toFixed(1)} s (de ${b.de} a ${b.a}): ¿luz encendida o expuesto distinto al inicio?`);
     if (marcas.length) {
-      md.push('- Marcas de charla técnica (propuestas de corte):');
-      for (const m of marcas) md.push(`  - **${m.id}** ${reloj(m.desde)} → ${reloj(m.hasta)} (${(m.hasta - m.desde).toFixed(0)} s) · ${m.tipos.join('+')} · «${m.texto.slice(0, 70)}»`);
+      md.push('- Propuestas de corte (charla técnica y tramos ✂ marcados en vivo):');
+      for (const m of marcas) {
+        md.push(`  - **${m.id}** ${reloj(m.desde)} → ${reloj(m.hasta)} (${(m.hasta - m.desde).toFixed(0)} s) · ${m.tipos.join('+')} · «${m.texto.slice(0, 70)}»`
+          + `${m.aviso ? ` · ⚠ ${m.aviso}` : ''}${m.enVivo && m.contexto ? ` · se dice: «${m.contexto.slice(0, 160)}»` : ''}`);
+      }
     } else {
-      md.push(`- Marcas de charla técnica: ninguna${existe(`${base}.json`) ? '' : ' (sin transcripción)'}`);
+      md.push(`- Propuestas de corte: ninguna${existe(`${base}.json`) ? '' : ' (sin transcripción)'}`);
+    }
+    if (momentos.length) {
+      md.push('- ★ Momentos buenos marcados en vivo (lo de justo antes de la marca):');
+      for (const x of momentos) md.push(`  - ${reloj(x.t)} · ${x.nombre}${x.texto ? ` · «${x.texto}»` : ''}`);
+    }
+    if (paraRevisar.length) {
+      md.push('- ✂ marcados en vivo sin tramo (dos pulsaciones seguidas): revisa lo de justo antes:');
+      for (const x of paraRevisar) md.push(`  - ${reloj(x.t)} · ${x.nombre}${x.texto ? ` · «${x.texto}»` : ''}`);
     }
     md.push('');
   }
@@ -300,7 +405,8 @@ function aprobar(carpeta, ids) {
     const parte = (actual.partes[p] = actual.partes[p] || {});
     parte.cortes = parte.cortes || [];
     const yaEsta = parte.cortes.some((c) => Array.isArray(c) && Math.abs(Number(c[0]) - m.desde) < 0.5);
-    if (!yaEsta) parte.cortes.push([m.desde, m.hasta]);
+    // La nota (tercer elemento) dice de dónde sale el corte; el montaje solo usa los dos tiempos.
+    if (!yaEsta) parte.cortes.push([m.desde, m.hasta, `${id} ${m.tipos.join('+')}: ${m.texto}`.slice(0, 120)]);
     hechos.push(`${id}: parte ${p}, ${reloj(m.desde)} → ${reloj(m.hasta)}${yaEsta ? ' (ya estaba)' : ''}`);
   }
   escribirJson(destino, actual);
@@ -413,5 +519,5 @@ function verificar(carpeta) {
 
 module.exports = {
   marcarFase, estado, huellaDeParte, llamadaDe, resolverLimites, resolverCortesTexto, sueloDeRuido, confirmarSilencios,
-  analizar, aprobar, verificar, coincidencia, tiempoASeg,
+  analizar, aprobar, verificar, coincidencia, tiempoASeg, marcasEnVivo, guiasDeMarcas, textoEntre, CORTE_EN_VIVO_MINIMO,
 };

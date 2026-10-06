@@ -33,6 +33,7 @@
     remoteStatus: null,
     wakeLock: null,
     recuperando: false,   // se entró para retomar una grabación tras una caída de la página
+    corteAbierto: null,   // tramo «✂ cortar» abierto en la sala: { inicio (hora del servidor), nombre }
   };
 
   // Marca en el navegador mientras se graba: si la página muere, al reabrir sigue ahí y permite retomar.
@@ -348,6 +349,7 @@
       const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/sesion`, { cache: 'no-store' });
       if (!r.ok) return;
       const { session } = await r.json();
+      aplicarMarcas(session);   // por si se perdió el aviso de un tramo ✂ abierto o cerrado
       const accion = Llamada.alRecibirGrabacion({ recuperando: false, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: session });
       if (accion === 'nada' || Llamada.esPronto({ accion, sesion: session, ahora: serverNow() })) return;
       Registro.anotar('grabacion-corregida', { accion, sesion: session?.id });
@@ -437,11 +439,18 @@
       signal: onSignal,
       status: (d) => { state.remoteStatus = d.status; renderRemoteStatus(); },
       'record-start': (d) => {
+        aplicarMarcas(d);
         // Si esta página seguía grabando una sesión anterior (se perdió su parada), la cierra y empieza la nueva.
         if (state.rec && state.rec.session.id !== d.id) { aplicarGrabacion('cambiar', d); return; }
         startRecording(d).catch((err) => { console.error(err); toast(`Error al grabar: ${err.message}`, 'error'); });
       },
-      'record-stop': stopRecording,
+      'record-stop': (d) => { aplicarMarcas(d); stopRecording(d); },
+      marca: (d) => {
+        aplicarMarcas(d.session);
+        if (d.de === state.me.id) return;   // quien la puso ya vio su aviso
+        const aviso = Llamada.avisoDeMarca(d.marca, { propia: false });
+        if (aviso) toast(aviso.texto, aviso.tipo);
+      },
       'room-full': (d) => { state.roomFull = true; setConn('Sala llena'); toast(d.error, 'error'); },
     };
     ws.onopen = () => { opened = true; setConn('Conectado a la sala'); Registro.anotar('ws-abierto', { intento: attempt }); };
@@ -473,6 +482,7 @@
       closeCall();
       setRemote(null);
     }
+    aplicarMarcas(d.session);
     // Al (re)entrar se mira la grabación de la sala: si se perdió la orden de grabar o de parar, se corrige ya.
     const accion = Llamada.alRecibirGrabacion({ recuperando: state.recuperando, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: d.session });
     if (accion !== 'nada') Registro.anotar('grabacion-en-curso', { accion, sesion: d.session?.id });
@@ -938,10 +948,45 @@
 
   function timerLoop() {
     const rec = state.rec;
-    if (!rec) { $('#timer').textContent = '00:00:00'; renderRemoteStatus(); return; }
+    if (!rec) { $('#timer').textContent = '00:00:00'; renderRemoteStatus(); renderMarcas(); return; }
     $('#timer').textContent = fmtTime(localNow() - rec.startLocal);
     renderRemoteStatus();
+    renderMarcas();
     setTimeout(timerLoop, 250);
+  }
+
+  // ------------------------------------------------------------------ marcas en vivo
+  // ✂ abre un tramo para cortar y lo cierra la siguiente pulsación (de cualquiera de los dos); ★ marca un buen
+  // momento (lo de justo antes). Quedan en la sesión con la hora del servidor y el editor las convierte en
+  // propuestas de corte y en guías del proyecto. En el PC, también con las teclas C y B.
+  async function marcar(tipo) {
+    if (!state.rec || state.rec.stopping) return;
+    const cuerpo = { tipo, from: state.me.id, hora: serverNow() };
+    if (tipo === 'corte') cuerpo.accion = state.corteAbierto ? 'cerrar' : 'abrir';
+    try {
+      const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/marca`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Error');
+      aplicarMarcas(j.session);
+      const aviso = Llamada.avisoDeMarca(j.marca, { propia: true });
+      if (aviso) toast(aviso.texto, aviso.tipo);
+      Registro.anotar('marca', { tipo, accion: cuerpo.accion || '' });
+    } catch (err) {
+      toast(`No se pudo marcar: ${err.message}`, 'error');
+    }
+  }
+
+  function aplicarMarcas(sesion) {
+    state.corteAbierto = (sesion && sesion.recording !== false && sesion.corteAbierto) || null;
+    renderMarcas();
+  }
+
+  function renderMarcas() {
+    const btn = $('#btnCorte');
+    btn.textContent = Llamada.textoBotonCorte(state.corteAbierto, serverNow());
+    btn.classList.toggle('active', !!state.corteAbierto);
   }
 
   function addUploader(u) {
@@ -1124,6 +1169,16 @@
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && state.rec && isIOS) toast('En iPad no salgas de Safari mientras grabas: la cámara se detiene.', 'warn');
+    });
+    $('#btnCorte').addEventListener('click', () => marcar('corte'));
+    $('#btnBueno').addEventListener('click', () => marcar('bueno'));
+    // Teclas C (✂) y B (★) mientras se graba, salvo si se está escribiendo en un campo.
+    document.addEventListener('keydown', (e) => {
+      if (!state.rec || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+      const tecla = e.key.toLowerCase();
+      if (tecla === 'c') marcar('corte');
+      else if (tecla === 'b') marcar('bueno');
     });
   }
 
