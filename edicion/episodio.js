@@ -35,6 +35,11 @@ const CONFIG_POR_DEFECTO = {
   // Silencios largos: se recortan dejando `dejar` segundos de pausa. Se buscan en la llamada y se
   // comprueban en los micros: si en un micro hay voz (la llamada perdió el audio de alguien), no se corta.
   silencios: { activo: true, min: 4, dejar: 1, db: -42, confirmarEnMicros: true },
+  // Saltos de imagen: si a los dos lados de un corte se ve a la misma persona, se pone `segundos` la cámara
+  // del otro justo después del corte, y no se deja junto a un corte un plano de menos de `minimo` segundos.
+  disimularCortes: { activo: true, segundos: 1.5, minimo: 0.6 },
+  // Aviso al terminar lo que tarda (render, análisis…): en Windows y, si se pone un tema de ntfy, en el móvil.
+  avisos: { activo: true, windows: true, ntfy: '', minimoSegundos: 60 },
   // Tramos a quitar siempre, en segundos del reloj de la llamada: [["2:02", "2:34"]].
   cortes: [],
   // Limpieza de un micro en un tramo: [{ persona: "jc", desde: 640, hasta: 730 }].

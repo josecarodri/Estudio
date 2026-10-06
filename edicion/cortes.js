@@ -252,6 +252,191 @@ function mantenerPlano(recipe, desdeSeg, hastaSeg) {
   return out;
 }
 
+/* A quién se ve en un plano: «cam_jc-2» (o «p2_cam_jc-2», ya unido) es jc, igual que «cam_jc». */
+function personaDeClip(clip) {
+  return String(clip || '').replace(/^p\d+_/, '').replace(/^cam_/, '').replace(/-\d+$/, '');
+}
+
+/*
+ * Disimula los saltos de imagen de los cortes. Si a los dos lados de un corte se ve a la misma
+ * persona, el corte se nota: la misma cara cambia de golpe. Se arregla como en cualquier podcast:
+ * justo después del corte se pone un momento la cámara del otro, que está escuchando (va en
+ * sincronía: es su imagen de ese instante), y luego vuelve el plano de quien habla. Además, un plano
+ * que tras cortar quedaría de un instante (un destello) se absorbe en el de al lado.
+ *
+ * Trabaja sobre la receta SIN cortar, donde todas las cámaras van en sincronía, y solo toca la
+ * pista de vídeo: el audio no cambia. `tramosSeg`: los cortes, en segundos de la referencia.
+ * opciones:
+ *   segundos     cuánto se ve al otro tras el corte (1,5)
+ *   minimo       el plano más corto que se deja ver junto a un corte, en segundos (0,6)
+ *   fijos        [[desde, hasta]] en segundos: planos fijados a mano (mantenerPlano), no se tocan
+ *   personaAntes a quién se ve al final de la parte anterior: el principio de esta también es una unión
+ *   fotogramas   { idClip: frames } para no usar una cámara donde ya (o aún) no hay imagen
+ * Devuelve { receta, disimulados, absorbidos }.
+ */
+function disimularSaltos(recipe, tramosSeg, opciones) {
+  const o = opciones || {};
+  const fps = Number((recipe.project || {}).fps) || 25;
+  const origen = Number(recipe.origenReferencia) || 0;
+  const plano = Math.max(1, Math.round((o.segundos ?? 1.5) * fps));
+  const minimo = Math.max(1, Math.round((o.minimo ?? 0.6) * fps));
+  const aFrame = (s) => Math.round((s - origen) * fps);
+  const esVideo = (e) => !e.audioTrack && String(e.clip).includes('cam_');
+  const video = recipe.edit.filter(esVideo);
+  const resto = recipe.edit.filter((e) => !esVideo(e));
+  const total = duracionFrames(recipe);
+  const cortes = unirTramos(tramosSeg.map((t) => ({ desde: Math.max(0, aFrame(t.desde)), hasta: Math.max(0, aFrame(t.hasta)) })))
+    .filter((c) => c.desde < total);
+  const fijos = (o.fijos || []).map(([a, b]) => [aFrame(a), aFrame(b)]);
+
+  // Los planos como tramos de la timeline; cada uno recuerda el clip original del que sale su `in`.
+  let planos = video.map((e) => ({ inicio: e.at, fin: e.at + e.duration, clip: e.clip, base: e })).sort((a, b) => a.inicio - b.inicio);
+  const plantillas = new Map();   // un clip de cada cámara, para colocar otro trozo suyo en sincronía
+  for (const e of video) if (!plantillas.has(e.clip)) plantillas.set(e.clip, e);
+  // Hasta dónde llega como poco cada archivo de cámara: lo más lejos que lo usa la receta (si no se sabe su duración).
+  const usadoHasta = new Map();
+  for (const e of video) usadoHasta.set(e.clip, Math.max(usadoHasta.get(e.clip) || 0, (e.in || 0) + e.duration));
+  const enFrame = (f) => planos.find((p) => p.inicio <= f && f < p.fin) || null;
+  const desfase = (base) => (base.in || 0) - base.at;
+  // El trozo de esa cámara más cercano a f: su `in` es el que mejor encaja (sin desfases de redondeo).
+  const plantillaCerca = (clip, f) => planos.filter((p) => p.clip === clip)
+    .reduce((m, p) => {
+      const d = Math.max(0, p.inicio - f, f - p.fin);
+      return !m || d < m.d ? { d, base: p.base } : m;
+    }, null)?.base || plantillas.get(clip);
+  // ¿Tiene imagen esa cámara en [a, b)? El archivo empieza en su frame 0 y acaba en su duración (si no
+  // se sabe, se da por buena hasta lo más lejos que ya usa la receta).
+  const disponible = (clip, a, b) => {
+    const base = plantillaCerca(clip, a);
+    if (!base) return false;
+    const inA = a + desfase(base);
+    return inA >= 0 && inA + (b - a) <= ((o.fotogramas || {})[clip] || usadoHasta.get(clip) || 0);
+  };
+  // Pone la cámara `clip` en [a, b), partiendo lo que haya, y junta los trozos seguidos del mismo clip.
+  const poner = (a, b, clip, base) => {
+    const nuevos = [];
+    for (const p of planos) {
+      if (p.fin <= a || p.inicio >= b) { nuevos.push(p); continue; }
+      if (p.inicio < a) nuevos.push({ ...p, fin: a });
+      if (p.fin > b) nuevos.push({ ...p, inicio: b });
+    }
+    nuevos.push({ inicio: a, fin: b, clip, base });
+    nuevos.sort((x, y) => x.inicio - y.inicio);
+    planos = [];
+    for (const p of nuevos) {
+      const u = planos[planos.length - 1];
+      if (u && u.clip === p.clip && u.fin === p.inicio && desfase(u.base) === desfase(p.base)) u.fin = p.fin;
+      else planos.push(p);
+    }
+  };
+  // Una cámara de otra persona con imagen en [a, b) (de jc puede haber dos: la de antes y la de después de una caída).
+  const otraCamara = (persona, a, b) => [...plantillas.keys()]
+    .find((clip) => personaDeClip(clip) !== persona && disponible(clip, a, b)) || null;
+
+  // Uniones: cada corte separa lo de antes (hasta c.desde) de lo de después (desde c.hasta). El
+  // principio de la parte también lo es si se sabe quién se veía al acabar la anterior.
+  const uniones = cortes.map((c, i) => ({
+    antes: c.desde, despues: c.hasta, desdeAntes: i ? cortes[i - 1].hasta : 0, hastaDespues: i + 1 < cortes.length ? cortes[i + 1].desde : total,
+  })).filter((u) => u.despues < total);
+  if (o.personaAntes) {
+    // Si la parte empieza con un corte, la unión con la anterior es la de ese corte; si no, el frame 0.
+    if (uniones[0] && uniones[0].antes === 0) uniones[0].personaAntes = o.personaAntes;
+    else uniones.unshift({ antes: 0, despues: 0, desdeAntes: 0, hastaDespues: cortes.length ? cortes[0].desde : total, personaAntes: o.personaAntes });
+  }
+
+  let disimulados = 0;
+  let absorbidos = 0;
+  for (const u of uniones) {
+    if (fijos.some(([a, b]) => u.antes >= a && u.antes <= b)) continue;
+    const enParte = u.personaAntes === undefined;
+    // 1. Un plano que antes del corte queda en un instante se absorbe en el anterior.
+    const cola = enParte && u.antes > 0 ? enFrame(u.antes - 1) : null;
+    if (cola) {
+      const desde = Math.max(cola.inicio, u.desdeAntes);
+      const previo = desde > u.desdeAntes ? enFrame(desde - 1) : null;
+      if (u.antes - desde < minimo && previo && previo.clip !== cola.clip && disponible(previo.clip, desde, u.antes)) {
+        poner(desde, u.antes, previo.clip, previo.base);
+        absorbidos += 1;
+      }
+    }
+    // 2. Lo mismo con el primer plano después del corte: se absorbe en el siguiente.
+    const cabeza = enFrame(u.despues);
+    if (cabeza) {
+      const hasta = Math.min(cabeza.fin, u.hastaDespues);
+      const siguiente = hasta < u.hastaDespues ? enFrame(hasta) : null;
+      if (hasta - u.despues < minimo && siguiente && siguiente.clip !== cabeza.clip && disponible(siguiente.clip, u.despues, hasta)) {
+        poner(u.despues, hasta, siguiente.clip, siguiente.base);
+        absorbidos += 1;
+      }
+    }
+    // 3. ¿La misma persona a los dos lados? Se pone al otro justo después del corte.
+    const antes = enParte ? (u.antes > 0 ? enFrame(u.antes - 1) : null) : null;
+    const quienAntes = enParte ? (antes && personaDeClip(antes.clip)) : u.personaAntes;
+    const despues = enFrame(u.despues);
+    if (!quienAntes || !despues || personaDeClip(despues.clip) !== quienAntes) continue;
+    let fin = Math.min(u.despues + plano, u.hastaDespues);
+    // Lo que quede del plano de esa persona tras el del otro no debe ser un destello.
+    const sigue = enFrame(fin);
+    if (sigue && personaDeClip(sigue.clip) === quienAntes && Math.min(sigue.fin, u.hastaDespues) - fin < minimo) fin = Math.min(sigue.fin, u.hastaDespues);
+    if (u.hastaDespues - fin < minimo) fin = u.hastaDespues;
+    const otra = otraCamara(quienAntes, u.despues, fin);
+    if (!otra) continue;
+    poner(u.despues, fin, otra, plantillaCerca(otra, u.despues));
+    disimulados += 1;
+  }
+
+  const out = JSON.parse(JSON.stringify(recipe));
+  const nuevosPlanos = planos.map((p) => ({
+    ...JSON.parse(JSON.stringify(p.base)), at: p.inicio, duration: p.fin - p.inicio, in: (p.base.in || 0) + (p.inicio - p.base.at),
+  }));
+  out.edit = [...nuevosPlanos, ...JSON.parse(JSON.stringify(resto))];
+  return { receta: out, disimulados, absorbidos };
+}
+
+/* A quién se ve al final de una receta (ya cortada): para la unión con la parte siguiente. */
+function personaAlFinal(recipe) {
+  const video = recipe.edit.filter((e) => !e.audioTrack && String(e.clip).includes('cam_'));
+  if (!video.length) return null;
+  const ultimo = video.reduce((a, b) => (b.at + b.duration > a.at + a.duration ? b : a));
+  return personaDeClip(ultimo.clip);
+}
+
+/*
+ * Guías de los cortes, en el punto donde quedará cada empalme: «✂ motivo (−4,2 s)». Sirven para
+ * verlos en Kdenlive y para el vídeo de revisión. `tramosSeg` llevan su `motivo`; los que se
+ * solapan se juntan en uno. Se ponen en la receta SIN cortar: al cortar se mueven a su sitio.
+ */
+function guiasDeCortes(recipe, tramosSeg) {
+  const fps = Number((recipe.project || {}).fps) || 25;
+  const origen = Number(recipe.origenReferencia) || 0;
+  const orden = tramosSeg.filter((t) => t.hasta > t.desde).sort((a, b) => a.desde - b.desde);
+  const juntos = [];
+  for (const t of orden) {
+    const u = juntos[juntos.length - 1];
+    if (u && t.desde <= u.hasta) {
+      u.hasta = Math.max(u.hasta, t.hasta);
+      if (t.motivo && !u.motivos.includes(t.motivo)) u.motivos.push(t.motivo);
+    } else {
+      juntos.push({ desde: t.desde, hasta: t.hasta, motivos: t.motivo ? [t.motivo] : [] });
+    }
+  }
+  const fin = duracionFrames(recipe);
+  return juntos
+    .map((t) => ({ at: Math.max(0, Math.round((t.desde - origen) * fps)), t }))
+    .filter(({ at }) => at < fin)
+    .map(({ at, t }) => ({
+      at,
+      name: `✂ ${t.motivos.join(' + ') || 'corte'} (−${String(Math.round((t.hasta - t.desde) * 10) / 10).replace('.', ',')} s)`,
+      color: 'Purple',
+    }));
+}
+
+/* ¿Es la guía de un corte (las de guiasDeCortes)? Devuelve { motivo, segundos } o null. */
+function leerGuiaDeCorte(g) {
+  const m = /^✂ (.*) \(−([\d,]+) s\)$/.exec(String((g && g.name) || ''));
+  return m ? { motivo: m[1], segundos: Number(m[2].replace(',', '.')) } : null;
+}
+
 /* En qué frame de la timeline queda un instante (segundos de la referencia) tras los cortes. */
 function posicionTrasCortes(recipe, tramosSeg, seg) {
   const fps = Number((recipe.project || {}).fps) || 25;
@@ -299,6 +484,11 @@ function insertarTramo(recipe, tramo, pos, prefijo) {
 }
 
 module.exports = {
+  personaDeClip,
+  disimularSaltos,
+  personaAlFinal,
+  guiasDeCortes,
+  leerGuiaDeCorte,
   mantenerPlano,
   posicionTrasCortes,
   insertarTramo,

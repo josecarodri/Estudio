@@ -83,6 +83,11 @@ body.recording .tile { border-color: var(--rec); }
 .record[data-mode="recording"] { background: var(--panel-2); border-color: var(--rec); color: var(--rec); }
 .record.confirm { background: var(--warn); border-color: var(--warn); color: #111; font-size: 15px; }
 .timer { font-variant-numeric: tabular-nums; font-size: 22px; min-width: 110px; }
+/* Marcas en vivo (✂ cortar / ★ bueno): solo mientras se graba. Botones grandes para el dedo en el iPad. */
+.marcas { display: none; gap: 10px; }
+body.recording .marcas { display: inline-flex; }
+.marcas button { font-size: 16px; padding: 12px 18px; min-width: 120px; font-variant-numeric: tabular-nums; }
+.marcas button.active { animation: pulse 1s infinite; }
 
 .upload { padding: 10px 0; border-top: 1px solid var(--line); }
 .upload:first-child { border-top: 0; }

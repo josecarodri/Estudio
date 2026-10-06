@@ -285,14 +285,65 @@ async function handle(req, res) {
         const t = now();
         const endBeepAt = t + 1500;
         const stopAt = t + 2500;
-        room.session = { ...room.session, recording: false, stopAt, endBeepAt };
+        room.session = { ...room.session, recording: false, stopAt, endBeepAt, corteAbierto: null };
         const s = sessions.get(`${roomName}/${room.session.id}`);
-        if (s) { s.stopAt = stopAt; s.endBeepAt = endBeepAt; saveSession(s); }
+        if (s) {
+          s.stopAt = stopAt; s.endBeepAt = endBeepAt;
+          // Un tramo «✂ cortar» que nadie cerró termina con la grabación.
+          for (const m of s.marcas || []) if (m.tipo === 'corte' && m.fin == null) { m.fin = stopAt; m.cerradoAlParar = true; }
+          saveSession(s);
+        }
         slog('grabacion-fin', { sala: roomName, sesion: room.session.id, pedida_por: msg.from });
         broadcast(room, 'record-stop', room.session);
         return json(res, 200, room.session);
       }
       return json(res, 400, { error: 'Acción desconocida' });
+    }
+
+    // Marcas puestas mientras se graba: «✂ cortar» es un tramo (se abre y se cierra, lo puede cerrar
+    // cualquiera de los dos) y «★ bueno» un instante (lo bueno es lo de justo antes). Quedan en
+    // session.json con la hora del servidor; el editor las convierte en propuestas de corte y en guías.
+    if (action === 'marca' && req.method === 'POST') {
+      const msg = await readJson(req);
+      const sesion = room.session;
+      const s = sesion?.recording ? sessions.get(`${roomName}/${sesion.id}`) : null;
+      if (!s) return json(res, 409, { error: 'Solo se puede marcar mientras se graba' });
+      const t = now();
+      // La hora la pone la página con su reloj sincronizado (el aviso puede llegar con retraso); si no cuadra, la de ahora.
+      const hora = Math.round(Number.isFinite(msg.hora) && msg.hora >= s.startAt - 5000 && msg.hora <= t + 5000 ? msg.hora : t);
+      const quien = {
+        nombre: room.peers.get(msg.from)?.name || s.participants[msg.from]?.name || 'alguien',
+        persona: s.participants[msg.from]?.label || null,
+      };
+      s.marcas = s.marcas || [];
+      let marca;
+      if (msg.tipo === 'bueno') {
+        marca = { tipo: 'bueno', hora, ...quien };
+        s.marcas.push(marca);
+      } else if (msg.tipo === 'corte') {
+        const abierta = s.marcas.find((m) => m.tipo === 'corte' && m.fin == null);
+        // Se pide abrir o cerrar (no «cambiar»): si los dos pulsan a la vez, no se abre y se cierra en el acto.
+        if (msg.accion === 'cerrar' ? !abierta : abierta) return json(res, 200, { ok: true, session: sesion });
+        if (abierta) {
+          abierta.fin = Math.max(hora, abierta.inicio);
+          abierta.cierra = quien.nombre;
+          marca = abierta;
+        } else {
+          marca = { tipo: 'corte', inicio: hora, fin: null, ...quien };
+          s.marcas.push(marca);
+        }
+        room.session = { ...sesion, corteAbierto: marca.fin == null ? { inicio: marca.inicio, nombre: marca.nombre } : null };
+      } else {
+        return json(res, 400, { error: 'Tipo de marca desconocido' });
+      }
+      saveSession(s);
+      slog('marca', {
+        sala: roomName, sesion: s.id, tipo: marca.tipo, nombre: quien.nombre,
+        segundo: Math.round(((marca.fin ?? marca.inicio ?? marca.hora) - s.startAt) / 100) / 10,
+        ...(marca.tipo === 'corte' ? { estado: marca.fin == null ? 'abierto' : 'cerrado' } : {}),
+      });
+      broadcast(room, 'marca', { de: msg.from, marca, session: room.session });
+      return json(res, 200, { ok: true, marca, session: room.session });
     }
     return json(res, 404, { error: 'Ruta desconocida' });
   }

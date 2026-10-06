@@ -32,7 +32,7 @@ test('config: los cortes de un episodio no pasan al siguiente (aprobar escribe e
   escribir(path.join(ep1, 'montaje', 'propuesta.json'), { partes: { 1: { marcas: [{ id: '1.1', desde: 75, hasta: 181, tipos: ['conexion'], texto: 'x' }] } } });
   const r = AU.aprobar(ep1, ['1.1']);
   assert.strictEqual(r.destino, path.join(ep1, 'episodio.json'));
-  assert.deepStrictEqual(leer(path.join(ep1, 'episodio.json')).partes[1].cortes, [[75, 181]]);
+  assert.deepStrictEqual(leer(path.join(ep1, 'episodio.json')).partes[1].cortes, [[75, 181, '1.1 conexion: x']]);
   assert.strictEqual(leer(path.join(raiz, 'episodio.json')).partes, undefined, 'la raíz no se toca');
 
   const ep2 = path.join(raiz, '2026-10-10');

@@ -117,9 +117,33 @@
     return yoGrabo && msGrabando > graciaMs ? 'no-graba' : null;
   }
 
+  /**
+   * Aviso que se enseña cuando alguien pone una marca mientras se graba (✂ cortar un tramo, ★ buen
+   * momento). `propia`: la puso esta página. Devuelve { texto, tipo } para el aviso.
+   */
+  function avisoDeMarca(marca, { propia } = {}) {
+    if (!marca) return null;
+    if (marca.tipo === 'bueno') {
+      return { texto: propia ? '★ Buen momento marcado' : `★ ${marca.nombre} marcó un buen momento`, tipo: '' };
+    }
+    if (marca.tipo !== 'corte') return null;
+    if (marca.fin == null) {
+      return { texto: `✂ ${propia ? 'Tramo' : `${marca.nombre} abrió un tramo`} para cortar: pulsa ✂ cuando acabe`, tipo: 'warn' };
+    }
+    const s = Math.max(0, Math.round((marca.fin - marca.inicio) / 1000));
+    return { texto: `✂ Tramo para cortar cerrado (${s} s)`, tipo: '' };
+  }
+
+  /** Texto del botón ✂: abrir un tramo, o cerrarlo y cuánto lleva abierto. */
+  function textoBotonCorte(corteAbierto, ahora) {
+    if (!corteAbierto) return '✂ Cortar';
+    const s = Math.max(0, Math.floor((ahora - corteAbierto.inicio) / 1000));
+    return `✂ Cerrar corte ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
   const api = {
     viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio,
-    recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro,
+    recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro, avisoDeMarca, textoBotonCorte,
   };
   root.Llamada = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -29,6 +29,8 @@ const CUT = require('./cortes.js');
 const TR = require('./transcribir.js');
 const AU = require('./auto.js');
 const LL = require('./llamadas.js');
+const RV = require('./revision.js');
+const AV = require('./avisos.js');
 
 function exists(p) {
   try {
@@ -1309,6 +1311,7 @@ function cmdEpisodio(args) {
   if (args.flags.reanudar && !reanudar) console.log('aviso   no hay montaje previo que reanudar; se hace desde cero.');
   if (reanudar) console.log(`reanudando con el montaje ya hecho: ${recetaUnida}`);
   const recetas = [];
+  let personaAntes = null; // a quién se ve al acabar la parte anterior (la unión de las partes también es un empalme)
   const agregados = []; // tramos que se ponen al final del episodio
   for (const parte of reanudar ? [] : partes) {
     const cfg = EP.configDeParte(config, parte.id);
@@ -1393,6 +1396,8 @@ function cmdEpisodio(args) {
         hasta: tiempoASegundos(x.tramo[1], `cortes de la parte ${parte.id}`),
       };
       if (x.texto) console.log(`  corte por texto ${x.texto}: ${segundosAReloj(t.desde)} → ${segundosAReloj(t.hasta)}`);
+      // De dónde sale cada corte (para la revisión): un texto, una propuesta aprobada o un corte a mano.
+      t.motivo = x.texto ? `texto ${x.texto}` : (x.nota || 'corte a mano');
       return t;
     });
     if (config.silencios && config.silencios.activo && !args.flags['sin-silencios'] && llamada) {
@@ -1410,7 +1415,18 @@ function cmdEpisodio(args) {
         for (const d of conf.descartados) {
           console.log(`    no se corta ${segundosAReloj(d.desde)} → ${segundosAReloj(d.hasta)}: la llamada calla, pero en el micro de ${d.micro} hay ${d.segundos.toFixed(1)} s de voz (¿se cortó la llamada?)`);
         }
-        tramos.push(...conf.quedan);
+        tramos.push(...conf.quedan.map((t) => ({ ...t, motivo: 'silencio' })));
+      }
+    }
+    // Marcas puestas en vivo con los botones del Estudio: ★ y los tramos ✂ que no se cortan, como guías.
+    const enVivo = AU.marcasEnVivo(parte, r.montaje);
+    if (enVivo.length) {
+      const g = AU.guiasDeMarcas(receta, enVivo, tramos);
+      receta = { ...receta, guides: [...(receta.guides || []), ...g.guias] };
+      const buenos = enVivo.filter((m) => m.tipo === 'bueno').length;
+      console.log(`  marcas en vivo: ${buenos} ★, ${enVivo.length - buenos} ✂ (en el proyecto como guías)`);
+      if (g.sinCortar) {
+        console.log(`  aviso   ${g.sinCortar} tramo(s) ✂ marcados en vivo NO se cortan: si sobran, aprueba su propuesta (ver montaje/propuesta.md)`);
       }
     }
     // Tramos que se copian al final del episodio (p. ej. el llamado a las plataformas).
@@ -1431,6 +1447,29 @@ function cmdEpisodio(args) {
     });
     const recetaSinCortar = receta;
 
+    // Saltos de imagen: si a los dos lados de un corte (o de la unión con la parte anterior) se ve a la
+    // misma persona, se pone un momento la cámara del otro. Se hace en la receta sin cortar, en sincronía.
+    const dc = config.disimularCortes || {};
+    if (dc.activo !== false && (tramos.length || personaAntes)) {
+      const fps = Number(receta.project.fps);
+      const fotogramas = {};
+      for (const m of receta.media) {
+        if (!m.id.startsWith('cam_') || !M.hasFfprobe()) continue;
+        const p = M.probe(m.path, null);
+        if (p && p.seconds) fotogramas[m.id] = Math.floor(p.seconds * fps);
+      }
+      const fijos = (cfg.mantenerPlano || []).map((t) => [
+        tiempoASegundos(t[0], `mantenerPlano de la parte ${parte.id}`), tiempoASegundos(t[1], `mantenerPlano de la parte ${parte.id}`)]);
+      const d = CUT.disimularSaltos(receta, tramos, { segundos: dc.segundos, minimo: dc.minimo, fijos, personaAntes, fotogramas });
+      receta = d.receta;
+      if (d.disimulados || d.absorbidos) {
+        console.log(`  saltos de imagen: ${d.disimulados} disimulado(s) con el plano del otro`
+          + `${d.absorbidos ? `, ${d.absorbidos} plano(s) de un instante absorbido(s)` : ''}`);
+      }
+    }
+    // Una guía en cada empalme («✂ motivo (−4,2 s)»): se ven en Kdenlive y las usa el vídeo de revisión.
+    if (tramos.length) receta = { ...receta, guides: [...(receta.guides || []), ...CUT.guiasDeCortes(receta, tramos)] };
+
     const antes = CUT.duracionFrames(receta);
     if (tramos.length) {
       receta = CUT.aplicarCortes(receta, tramos);
@@ -1448,6 +1487,7 @@ function cmdEpisodio(args) {
     }
     fs.writeFileSync(path.join(carpetaParte, 'multicam-cortado.json'), `${JSON.stringify(receta, null, 2)}\n`, 'utf8');
     recetas.push(receta);
+    personaAntes = CUT.personaAlFinal(receta);
   }
 
   const nombre = path.basename(r.base);
@@ -1486,15 +1526,19 @@ function cmdEpisodio(args) {
     if (b !== 0) { AU.marcarFase(r, 'error', 'no se pudo generar el proyecto'); return b; }
     fs.writeFileSync(huellaProyectoFile(r), `${huellaArchivo(proyecto)}\n`, 'utf8');
   }
-  if (args.flags['solo-montaje']) { AU.marcarFase(r, 'montaje-listo', `${(dur / 60).toFixed(1)} min`); return 0; }
+  if (args.flags['solo-montaje']) {
+    AU.marcarFase(r, 'montaje-listo', `${(dur / 60).toFixed(1)} min`);
+    AV.ponerResumen(`proyecto listo para revisar: ${(dur / 60).toFixed(1)} min (montaje/episodio.kdenlive)`);
+    return 0;
+  }
 
   const bruto = path.join(r.montaje, 'episodio-bruto.mp4');
   AU.marcarFase(r, 'renderizando', `${(dur / 60).toFixed(1)} min de vídeo`);
   const c = cmdRender({ ...args, _: [usarProyecto ? proyecto : recetaUnida], flags: { ...args.flags, out: bruto, crf: 14 } });
-  if (c !== 0) { AU.marcarFase(r, 'error', 'falló el render'); return c; }
+  if (c !== 0) { AU.marcarFase(r, 'error', 'falló el render'); AV.ponerResumen('falló el render (mira la consola)'); return c; }
   // verificar compara la duración con la receta, salvo si se renderizó el proyecto retocado a mano.
   fs.writeFileSync(path.join(r.montaje, 'episodio-bruto.origen'), usarProyecto ? 'proyecto\n' : 'receta\n', 'utf8');
-  if (args.flags['sin-acabado']) { AU.marcarFase(r, 'render-listo'); return 0; }
+  if (args.flags['sin-acabado']) { AU.marcarFase(r, 'render-listo'); AV.ponerResumen('render en bruto listo (montaje/episodio-bruto.mp4)'); return 0; }
 
   const final = path.join(r.entrega, `${nombre}.mp4`);
   console.log('');
@@ -1503,6 +1547,7 @@ function cmdEpisodio(args) {
   if (a.error) {
     console.error(`error en el acabado: ${a.error}`);
     AU.marcarFase(r, 'error', 'falló el acabado');
+    AV.ponerResumen(`falló el acabado: ${a.error}`.slice(0, 200));
     return 1;
   }
   const p = M.hasFfprobe() ? M.probe(final, null) : null;
@@ -1514,9 +1559,12 @@ function cmdEpisodio(args) {
     const v = AU.verificar(r.base);
     console.log(`\nverificación:\n  ${v.lineas.join('\n  ')}`);
     AU.marcarFase(r, v.fallos ? 'listo-con-avisos' : 'listo', v.fallos ? `${v.fallos} comprobación(es) fallida(s)` : 'verificado');
+    AV.ponerResumen(`listo para YouTube: ${path.basename(final)}${p ? ` · ${(p.seconds / 60).toFixed(1)} min` : ''} · `
+      + `${v.fallos ? `${v.fallos} comprobación(es) con aviso: mira «estado»` : 'verificación ✔'}`);
     return v.fallos ? 3 : 0;
   }
   AU.marcarFase(r, 'listo');
+  AV.ponerResumen(`listo para YouTube: ${path.basename(final)}`);
   return 0;
 }
 
@@ -1620,6 +1668,9 @@ function cmdAnalizar(args) {
   if (!carpeta) { console.error('uso: node cli.js analizar <carpeta-del-episodio> [--sin-transcribir]'); return 2; }
   const res = AU.analizar(carpeta, args.flags);
   console.log(res.texto);
+  const partes = Object.values(res.propuesta.partes);
+  const n = (k) => partes.reduce((s, p) => s + ((p[k] || []).length), 0);
+  AV.ponerResumen(`propuesta lista: ${n('marcas')} propuesta(s) de corte${n('momentos') ? `, ${n('momentos')} ★` : ''} (montaje/propuesta.md)`);
   return 0;
 }
 
@@ -1693,85 +1744,66 @@ function cmdTranscribir(args) {
  * empalme (donde se quitó algo) y de la unión entre partes, con el color de acabado
  * aplicado. Sirve para comprobar los cortes y el color sin renderizar el episodio entero.
  */
-function cmdMuestra(args) {
+/*
+ * Vídeo de revisión para el móvil: unos segundos alrededor de cada empalme (numerados, con su motivo y
+ * una barra roja en el corte), el principio y el final, en 480p. Deja montaje/revision.mp4 y
+ * montaje/revision.md. Los silencios recortados solo salen con --silencios. Ver revision.js.
+ */
+function cmdRevision(args) {
   const carpeta = args._[0];
   if (!carpeta) {
-    console.error('uso: node cli.js muestra <carpeta-del-episodio> [--antes 5] [--despues 8]');
+    console.error('uso: node cli.js revision <carpeta-del-episodio> [--silencios] [--antes 4] [--despues 4]');
     return 2;
   }
   const melt = buscarBinario('melt');
-  if (!melt) throw new Error('no se encontró melt.');
+  if (!melt) throw new Error('no se encontró melt (viene con Kdenlive).');
+  if (!which('ffmpeg')) throw new Error('hace falta ffmpeg.');
   const r = EP.rutas(carpeta);
   const recetaFile = path.join(r.montaje, 'episodio.json');
-  const proyecto = path.join(r.montaje, 'episodio.kdenlive');
-  if (!exists(recetaFile) || !exists(proyecto)) {
-    throw new Error('no hay montaje: ejecuta primero  node cli.js episodio <carpeta> --solo-montaje');
-  }
+  if (!exists(recetaFile)) throw new Error('no hay montaje: ejecuta primero  node cli.js episodio <carpeta> --solo-montaje');
   const { config } = EP.cargarConfig(r.base);
   const receta = readJson(recetaFile);
   const fps = Number(receta.project.fps);
-  const antes = Math.round((args.flags.antes !== undefined ? Number(args.flags.antes) : 5) * fps);
-  const despues = Math.round((args.flags.despues !== undefined ? Number(args.flags.despues) : 8) * fps);
-  const total = CUT.duracionFrames(receta);
-
-  // Empalmes: donde un clip de audio empieza tras un corte, y donde empieza la parte 2.
-  const puntos = [];
-  for (const e of receta.edit) {
-    if (e.audioTrack === 1 && e.fadeIn === 1) puntos.push({ at: e.at, que: 'corte' });
-  }
-  const inicios = receta.edit.filter((e) => /^p([2-9])_/.test(e.clip)).map((e) => ({ at: e.at, clip: e.clip }));
-  if (inicios.length) {
-    const porParte = new Map();
-    for (const i of inicios) {
-      const p = i.clip.slice(0, 2);
-      porParte.set(p, Math.min(porParte.has(p) ? porParte.get(p) : Infinity, i.at));
-    }
-    for (const at of porParte.values()) puntos.push({ at, que: 'unión de partes' });
-  }
-  puntos.sort((a, b) => a.at - b.at);
-  const unicos = [];
-  for (const p of puntos) {
-    if (!unicos.length || p.at - unicos[unicos.length - 1].at > antes + despues) unicos.push(p);
-    else if (p.que === 'unión de partes') unicos[unicos.length - 1] = p;
-  }
-  if (!unicos.length) throw new Error('no hay empalmes que mostrar (¿no hay cortes?).');
-
-  const dir = path.join(r.montaje, 'muestra');
-  fs.mkdirSync(dir, { recursive: true });
-  const lista = [];
-  const notas = [];
-  console.log(`${unicos.length} empalmes → clips de ${((antes + despues) / fps).toFixed(0)} s con melt`);
-  unicos.forEach((p, i) => {
-    const a = Math.max(0, p.at - antes);
-    const b = Math.min(total - 1, p.at + despues);
-    const out = path.join(dir, `clip-${String(i + 1).padStart(2, '0')}.mp4`);
-    const res = spawnSync(melt, [proyecto, `in=${a}`, `out=${b}`, '-consumer', `avformat:${out}`,
-      'vcodec=libx264', 'crf=18', 'preset=veryfast', 'acodec=aac', 'ab=192k'],
-    { stdio: ['ignore', 'ignore', 'ignore'], timeout: 1800000 });
-    if (res.status !== 0 || !exists(out)) throw new Error(`falló el clip ${i + 1}`);
-    lista.push(out);
-    const donde = segundosAReloj(p.at / fps);
-    notas.push(`clip ${String(i + 1).padStart(2, '0')} · empalme a los ${donde} del vídeo final (${p.que}); `
-      + `el corte cae a los ${(antes / fps).toFixed(0)} s del clip`);
-    console.log(`  ${notas[notas.length - 1]}`);
+  const { byId, problems } = M.probeRecipe(receta, fps);
+  if (problems.length) throw new Error(`no se pueden leer los archivos del montaje: ${problems.join('; ')}`);
+  const num = (v, d) => (v !== undefined && Number.isFinite(Number(v)) ? Number(v) : d);
+  console.log('vídeo de revisión: un trozo por empalme, más el principio y el final');
+  AU.marcarFase(r, 'revision', 'vídeo de revisión');
+  const res = RV.hacerRevision(receta, {
+    dir: path.join(r.montaje, 'revision'),
+    salida: path.join(r.montaje, 'revision.mp4'),
+    md: path.join(r.montaje, 'revision.md'),
+    melt,
+    media: byId,
+    compositing: compositingThatLoads().service,
+    docVersion: elegirFormato(args.flags['doc-version']).docVersion,
+    filtrosVideo: EP.filtrosVideo(config),
+    filtrosAudio: EP.filtrosAudio(config),
+    silencios: Boolean(args.flags.silencios),
+    antes: num(args.flags.antes, 4),
+    despues: num(args.flags.despues, 4),
+    episodio: path.basename(r.base),
+    log: (t) => console.log(t),
   });
-
-  const listaFile = path.join(dir, 'lista.txt');
-  fs.writeFileSync(listaFile, lista.map((f) => `file '${f.split(path.sep).join('/')}'`).join('\n'), 'utf8');
-  const salida = path.join(r.entrega, 'muestra-cortes-y-color.mp4');
-  fs.mkdirSync(r.entrega, { recursive: true });
-  const vf = EP.filtrosVideo(config);
-  const af = [...EP.filtrosAudio(config), `loudnorm=I=${config.lufsEntrega}:TP=${config.picoVerdadero}:LRA=11`];
-  console.log('\nuniendo y aplicando color...');
-  const fin = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', listaFile,
-    ...(vf.length ? ['-vf', vf.join(',')] : []),
-    '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
-    '-af', af.join(','), '-ar', '48000', '-c:a', 'aac', '-b:a', '256k', '-movflags', '+faststart', salida],
-  { encoding: 'utf8' });
-  if (fin.status !== 0) throw new Error(`ffmpeg falló: ${(fin.stderr || '').trim()}`);
-  fs.writeFileSync(path.join(r.entrega, 'muestra-cortes-y-color.txt'), `${notas.join('\n')}\n`, 'utf8');
-  console.log(`\nmuestra lista: ${salida}`);
+  if (res.error) {
+    AU.marcarFase(r, 'error', 'falló el vídeo de revisión');
+    throw new Error(res.error);
+  }
+  const mb = (fs.statSync(path.join(r.montaje, 'revision.mp4')).size / 1048576).toFixed(0);
+  console.log(`
+revisión lista: ${path.join(r.montaje, 'revision.mp4')} (${segundosAReloj(res.segundos)}, ${mb} MB, ${res.trozos} trozos`
+    + `${res.rehechos < res.trozos ? `; ${res.trozos - res.rehechos} reutilizados` : ''})`);
+  console.log(`lista: ${path.join(r.montaje, 'revision.md')}`);
+  if (res.silenciosFuera) console.log(`(${res.silenciosFuera} silencios recortados no salen: --silencios para verlos)`);
+  AU.marcarFase(r, 'revision-lista', `${res.trozos} trozos, ${mb} MB`);
+  AV.ponerResumen(`revisión lista: ${res.trozos} trozos, ${segundosAReloj(res.segundos)} (montaje/revision.mp4)`);
   return 0;
+}
+
+/* `muestra` era la versión anterior de `revision`. */
+function cmdMuestra(args) {
+  console.log('(muestra ahora se llama revision)\n');
+  return cmdRevision(args);
 }
 
 // ------------------------------------------------------------------- selftest
@@ -1967,7 +1999,7 @@ function usage() {
   node cli.js multicam <archivos...>   monta una conversación a varias cámaras
   node cli.js ajustar-audio <receta>   mueve el audio sin repetir el análisis
   node cli.js calibrar <camaras...>    mide el retardo imagen-sonido (claqueta o palmada)
-  node cli.js muestra <carpeta>        vídeo corto con los empalmes y el color, sin renderizar todo
+  node cli.js revision <carpeta>       vídeo corto (480p) con cada empalme numerado, para revisar desde el móvil
   node cli.js importar [<carpeta>]     trae las sesiones del Estudio a originales/ (--copiar o --mover;
                                        --descargas para cogerlas de Descargas, --sesiones id,id para elegir)
   node cli.js config <carpeta>         configuración efectiva del episodio y de dónde sale (--tomar-de-raiz)
@@ -2033,6 +2065,7 @@ function main(argv) {
     verificar: cmdVerificar,
     estado: cmdEstado,
     muestra: cmdMuestra,
+    revision: cmdRevision,
     config: cmdConfig,
   };
 
@@ -2045,15 +2078,53 @@ function main(argv) {
     usage();
     return 2;
   }
+  // Lo que puede tardar mucho: el PC no se duerme mientras corre y, si tardó, se avisa al terminar.
+  const largo = COMANDOS_LARGOS.has(cmd) && args._[0] !== 'nuevo';
+  const soltar = largo ? AV.mantenerDespierto() : null;
+  const inicio = Date.now();
+  let codigo;
+  let fallo = null;
   try {
-    return commands[cmd](args);
+    codigo = commands[cmd](args);
   } catch (e) {
     console.error(`error: ${e.message}`);
-    return 1;
+    fallo = e;
+    codigo = 1;
   }
+  if (soltar) soltar();
+  if (largo) avisarAlTerminar(cmd, args, codigo, fallo, (Date.now() - inicio) / 1000);
+  else AV.tomarResumen();
+  return codigo;
 }
 
-if (require.main === module) process.exit(main(process.argv));
+const COMANDOS_LARGOS = new Set(['episodio', 'analizar', 'transcribir', 'render', 'revision', 'muestra']);
+
+/*
+ * Aviso al terminar un comando largo: en Windows y, si el episodio.json del equipo tiene un tema de ntfy,
+ * en el móvil. Dice el episodio, cómo acabó y lo que dejó el comando (AV.ponerResumen).
+ */
+function avisarAlTerminar(cmd, args, codigo, fallo, segundos) {
+  const resumen = AV.tomarResumen();
+  let config = EP.CONFIG_POR_DEFECTO;
+  let nombre = '';
+  try {
+    if (cmd !== 'render' && args._[0]) {
+      const r = EP.rutas(args._[0]);
+      config = EP.cargarConfig(r.base).config;
+      nombre = path.basename(r.base);
+    }
+  } catch { /* sin configuración: solo el aviso de Windows */ }
+  if (!AV.debeAvisar(segundos, config)) return;
+  const estado = codigo === 0 ? 'terminado' : (codigo === 3 ? 'terminado con avisos' : 'falló');
+  const texto = (fallo && fallo.message) || resumen || (codigo === 0 ? 'listo' : `código ${codigo}: mira la consola`);
+  AV.avisar(config, `${nombre ? `${nombre} · ` : ''}${cmd} ${estado}`, `${texto} (${AV.duracionLegible(segundos)})`, { error: codigo !== 0 });
+}
+
+if (require.main === module) {
+  const codigo = main(process.argv);
+  // Se da un momento a que salga el aviso al móvil antes de cerrar.
+  AV.esperarAvisos().then(() => process.exit(codigo));
+}
 
 module.exports = {
   main,

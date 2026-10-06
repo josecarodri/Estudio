@@ -172,6 +172,18 @@ en la forma de onda de cada pista (o usa «sincronizar por audio»).
 - La **grabación de la llamada** viene activada por defecto en el PC y desactivada en el iPad para no cargarlo.
 - Haz una prueba corta con la otra persona antes de la grabación real.
 
+## Marcas mientras se graba
+
+Mientras se graba aparecen dos botones junto a **■ Detener** (en el PC, también con teclas):
+
+- **✂ Cortar** (tecla **C**): abre un tramo para cortar —llora la niña, se va la conexión, alguien se equivoca— y la
+  siguiente pulsación, de cualquiera de los dos, lo cierra. Los dos ven que hay un tramo abierto y cuánto lleva. Si
+  nadie lo cierra, se cierra al parar.
+- **★ Bueno** (tecla **B**): marca un buen momento, lo que se acaba de decir.
+
+Se guardan en `session.json` (`marcas`) con la hora del servidor. El editor (`edicion/`) convierte los ✂ en
+propuestas de corte y los ★ en una lista de momentos buenos, y los pone como guías en el proyecto de Kdenlive.
+
 ## Resistencia a fallos
 
 - Cada segundo de grabación se guarda primero **en el propio dispositivo** (IndexedDB) y después se sube en orden.
