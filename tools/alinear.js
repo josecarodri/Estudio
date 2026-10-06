@@ -95,16 +95,19 @@ function alignSession(dir) {
   for (const [id, t] of Object.entries(s.tracks || {})) {
     const file = path.join(dir, t.file);
     if (!fs.existsSync(file) || fs.statSync(file).size < 1000) { console.log(`  · ${t.file}: vacío, se omite`); continue; }
-    let beep = detectBeep(file);
+    // Una pista que empezó después del pitido de inicio (un tramo retomado tras la caída de la página, o una
+    // página que se unió tarde) no lo tiene: el primer pitido de su archivo, si lo hay, es el de CIERRE (volvió
+    // poco antes de parar). Tomarlo por el de inicio la llevaría al principio de la sesión.
+    const quien = (s.participants || {})[t.participant] || {};
+    const sinPitidoInicial = Boolean(quien.retomada || quien.tarde)
+      || (t.startedAtServer != null && s.beepAt != null && t.startedAtServer > s.beepAt)
+      || (t.beepOffsetSec != null && t.beepOffsetSec < 0);
+    let beep = sinPitidoInicial ? null : detectBeep(file);
     let source = 'pitido detectado';
-    if (beep == null && t.beepOffsetSec != null) { beep = t.beepOffsetSec; source = 'metadatos (no se encontró el pitido)'; }
+    if (beep == null && t.beepOffsetSec != null) { beep = t.beepOffsetSec; source = sinPitidoInicial ? 'metadatos' : 'metadatos (no se encontró el pitido)'; }
     if (beep == null && t.startedAtServer != null && s.beepAt) { beep = (s.beepAt - t.startedAtServer) / 1000; source = 'metadatos'; }
     if (beep == null) { console.log(`  · ${t.file}: sin referencia de sincronía, se omite`); continue; }
-    const person = s.participants[t.participant]?.name || t.participant;
-    const expected = t.beepOffsetSec;
-    const drift = expected != null ? ` (metadatos: ${expected.toFixed(3)} s)` : '';
-    const tarde = beep < 0 ? ' · empezó después del pitido (tramo retomado o que se unió tarde)' : '';
-    console.log(`  · ${t.file}: pitido en ${beep.toFixed(3)} s — ${source}${drift}${tarde}`);
+    const person = quien.name || t.participant;
     const dur = duration(file);
 
     // Deriva: cada dispositivo tiene su propio reloj de audio/vídeo y en una hora pueden separarse decenas de ms.
@@ -112,7 +115,23 @@ function alignSession(dir) {
     // y se estira o encoge la pista en esa proporción.
     let ratio = 1;
     let endBeep = null;
-    if (nominal && dur) {
+    if (nominal && dur && sinPitidoInicial) {
+      // Sin pitido de inicio, el de cierre es la referencia exacta (la hora de los metadatos lleva el retraso de
+      // la red). Con una sola referencia no se mide la deriva; en un tramo así tampoco da tiempo a notarse.
+      const expectedEnd = beep + nominal;
+      endBeep = detectBeep(file, Math.max(0, expectedEnd - 3));
+      if (endBeep != null && Math.abs(endBeep - expectedEnd) <= 3) {
+        beep = endBeep - nominal;
+        source = 'pitido de cierre';
+      } else {
+        endBeep = null;
+      }
+    }
+    const expected = t.beepOffsetSec;
+    const drift = expected != null ? ` (metadatos: ${expected.toFixed(3)} s)` : '';
+    const tarde = beep < 0 ? ' · empezó después del pitido (tramo retomado o que se unió tarde)' : '';
+    console.log(`  · ${t.file}: pitido en ${beep.toFixed(3)} s — ${source}${drift}${tarde}`);
+    if (nominal && dur && !sinPitidoInicial) {
       const expectedEnd = beep + nominal;
       endBeep = detectBeep(file, Math.max(0, expectedEnd - 3));
       if (endBeep != null) {

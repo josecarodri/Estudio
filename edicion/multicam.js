@@ -42,6 +42,9 @@ function nombreBase(ruta) {
  */
 function analizarNombre(file) {
   const base = sinAcentos(nombreBase(file));
+  // «…_camara.resto-123456»: copia de rescate del Estudio con lo que no llegó al servidor. No es otra cámara:
+  // hay que juntarla antes con su archivo (cli.js juntar-copia).
+  if (/\.resto-\d+$/.test(base)) return { rol: 'resto', quien: null };
   // Se quitan la fecha de la sesión que pone el Estudio al descargar y los sufijos que añaden
   // los navegadores: "(1)", "-2".
   const limpio = base.replace(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_/, '')
@@ -70,9 +73,14 @@ function inferRoles(files) {
   const people = new Map();
   const unknown = [];
   const llamadas = [];
+  const restos = [];
 
   for (const file of files) {
     const { rol, quien } = analizarNombre(file);
+    if (rol === 'resto') {
+      restos.push(file);
+      continue;
+    }
     if (rol === 'call') {
       llamadas.push({ file, quien, base: personaBase(quien), tramo: tramoDe(quien) });
       continue;
@@ -88,7 +96,7 @@ function inferRoles(files) {
   }
 
   llamadas.sort((a, b) => a.base.localeCompare(b.base) || a.tramo - b.tramo);
-  return { people, call: llamadas.length ? llamadas[0].file : null, calls: llamadas.map((l) => l.file), llamadas, unknown };
+  return { people, call: llamadas.length ? llamadas[0].file : null, calls: llamadas.map((l) => l.file), llamadas, unknown, restos };
 }
 
 /* Convierte una envolvente lineal a dB, con suelo para no tener -Infinity. */
@@ -153,8 +161,11 @@ function sueloDeRuido(suave) {
  * Devuelve [{ startBin, endBin, id }] en tiempo de la referencia.
  *
  * Reglas, y el motivo de cada una:
- *  - gana quien tiene más energía, pero hace falta una ventaja clara (margenDb) para
- *    que la respiración o el eco del otro micro no provoquen un corte;
+ *  - gana quien tiene más energía respecto a SU voz (cada micro se iguala con su nivel típico de voz, como
+ *    se igualan al mezclar): en absoluto, un micro bajo perdería siempre contra el ruido de uno alto o
+ *    ruidoso, y no se le vería nunca. Y hace falta una ventaja clara (margenDb) para que la respiración o el
+ *    eco del otro micro no provoquen un corte;
+ *  - hay voz si está claramente por encima del ruido de ese mismo micro (sobreSueloDb);
  *  - un plano dura un mínimo (minShotBins): cortar cada vez que alguien asiente marea;
  *  - en los silencios no se corta: se mantiene a quien estuviera.
  */
@@ -171,7 +182,12 @@ function detectTurns(pistas, options) {
   const preparadas = pistas.map((p) => {
     const db = aDb(p.envelope);
     const suave = suavizar(db, Math.round(0.25 * binHz));
-    return { id: p.id, suave, offsetBins: p.offsetBins, suelo: sueloDeRuido(suave) };
+    const suelo = sueloDeRuido(suave);
+    // Nivel típico de su voz: el percentil 90 de lo que pasa del ruido, aunque hable poco (si se tomara más bajo,
+    // una interrupción corta suya contaría como muy fuerte y provocaría un corte). Si no habla nunca, 20 dB encima.
+    const voz = suave.filter((v) => v > suelo + sobreSueloDb);
+    const nivelVoz = voz.length ? percentil(voz, 0.9) : suelo + 20;
+    return { id: p.id, suave, offsetBins: p.offsetBins, suelo, nivelVoz };
   });
 
   const valorEn = (pista, bin) => {
@@ -189,23 +205,26 @@ function detectTurns(pistas, options) {
 
   for (let bin = desde; bin < hasta; bin += 1) {
     let mejor = null;
-    let mejorValor = -Infinity;
+    let mejorValor = -Infinity;   // dB respecto a la voz de ese micro
+    let mejorAbs = -Infinity;
     let segundoValor = -Infinity;
 
     for (const pista of preparadas) {
       const v = valorEn(pista, bin);
       if (v === null) continue;
-      if (v > mejorValor) {
+      const rel = v - pista.nivelVoz;
+      if (rel > mejorValor) {
         segundoValor = mejorValor;
-        mejorValor = v;
+        mejorValor = rel;
+        mejorAbs = v;
         mejor = pista;
-      } else if (v > segundoValor) {
-        segundoValor = v;
+      } else if (rel > segundoValor) {
+        segundoValor = rel;
       }
     }
 
     // Nadie habla, o nadie destaca: se mantiene el plano actual.
-    const hayVoz = mejor && mejorValor > mejor.suelo + sobreSueloDb;
+    const hayVoz = mejor && mejorAbs > mejor.suelo + sobreSueloDb;
     const destaca = segundoValor === -Infinity || mejorValor > segundoValor + margenDb;
     const ganador = hayVoz && destaca ? mejor.id : null;
 
@@ -334,32 +353,35 @@ function buildRecipe(sesion) {
     edit.push(corte);
   }
 
-  // Audio: cada micro entero y continuo, en su propia pista.
+  // Audio: cada micro entero y continuo, en su propia pista. Si de alguien no llegó el micro (su WAV), va el
+  // sonido de su cámara, también entero: si no, esa persona se quedaría muda en el montaje.
   const duracionTotal = aFrames((sesion.toBin || 0) - inicioTimeline);
   /*
    * Los tramos de una misma persona (jc y su retomado jc-2) comparten pista: no se solapan.
    * Un micro que empieza después del inicio del montaje (el tramo retomado) entra en su sitio.
    */
   const pistaDe = new Map();
-  const cronologicas = [...people].sort((a, b) => (offsets[a.mic] || 0) - (offsets[b.mic] || 0));
-  for (const persona of cronologicas) {
-    if (!persona.mic) continue;
+  const cronologicas = people.map((persona) => ({ persona, fuente: fuenteDeVoz(persona, probes) }))
+    .filter((x) => x.fuente)
+    .sort((a, b) => (offsets[a.fuente] || 0) - (offsets[b.fuente] || 0));
+  for (const { persona, fuente } of cronologicas) {
     const quien = personaBase(persona.id);
     if (!pistaDe.has(quien)) pistaDe.set(quien, pistaDe.size + 1);
-    const desfase = offsets[persona.mic] || 0;
+    const desfase = offsets[fuente] || 0;
     const dentroDelClip = (inicioTimeline / binHz) - desfase;
     const entrada = dentroDelClip < 0 ? 0 : Math.round(dentroDelClip * fps);
     const en = dentroDelClip < 0 ? Math.round(-dentroDelClip * fps) : 0;
-    const duracion = acotar(persona.mic, entrada, duracionTotal - en);
+    const duracion = acotar(fuente, entrada, duracionTotal - en);
     if (duracion <= 0) continue;
     const pistaAudio = {
-      clip: idPorArchivo.get(persona.mic),
+      clip: idPorArchivo.get(fuente),
       in: entrada,
       duration: duracion,
       at: en,
       audioTrack: pistaDe.get(quien),
     };
-    if (ganancias[persona.mic]) pistaAudio.gain = ganancias[persona.mic];
+    if (fuente !== persona.mic) pistaAudio.video = false; // de la cámara, solo el sonido
+    if (ganancias[fuente]) pistaAudio.gain = ganancias[fuente];
     edit.push(pistaAudio);
   }
 
@@ -388,6 +410,17 @@ function buildRecipe(sesion) {
   };
 }
 
+/*
+ * De dónde sale la voz de una persona: su micro, o si falta, el sonido de su cámara (salvo que se sepa que la
+ * cámara no tiene sonido). null si no hay ninguno.
+ */
+function fuenteDeVoz(persona, probes) {
+  if (persona.mic) return persona.mic;
+  if (!persona.cam) return null;
+  const info = (probes || {})[persona.cam];
+  return info && info.hasAudio === false ? null : persona.cam;
+}
+
 /* «jc-2» es el tramo retomado de «jc» tras una caída de la página del Estudio: la misma persona. */
 function personaBase(id) {
   return String(id).replace(/-\d+$/, '');
@@ -395,5 +428,5 @@ function personaBase(id) {
 
 module.exports = {
   personaBase, tramoDe, ROLES, sinAcentos, nombreBase, analizarNombre, inferRoles, aDb, suavizar, percentil,
-  sueloDeRuido, detectTurns, buildRecipe,
+  sueloDeRuido, detectTurns, buildRecipe, fuenteDeVoz,
 };

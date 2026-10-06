@@ -810,7 +810,7 @@ function cmdMulticam(args) {
   }
 
   // --- 1. quién es quién
-  const { people, call, calls, unknown } = MC.inferRoles(archivos);
+  const { people, call, calls, unknown, restos } = MC.inferRoles(archivos);
   const carpeta = path.resolve(String(args.flags.out || path.dirname(archivos[0])));
   console.log('material reconocido:');
   for (const [id, p] of people) {
@@ -828,6 +828,10 @@ function cmdMulticam(args) {
   }
   console.log(`  referencia de sincronía: ${referencia ? MC.nombreBase(referencia) : '(ninguna)'}`);
   for (const f of unknown) console.log(`  aviso   sin clasificar, se ignora: ${MC.nombreBase(f)}`);
+  for (const f of restos) {
+    console.log(`  aviso   ${MC.nombreBase(f)} es una copia de rescate (lo que no llegó al servidor): no se usa así.`
+      + ' Júntala antes con su archivo: node cli.js juntar-copia <archivo> <copia>');
+  }
 
   const personas = [...people.values()].filter((p) => p.cam);
   if (personas.length < 1) {
@@ -1042,18 +1046,20 @@ function cmdMulticam(args) {
   // --- 7. sonido: igualar el nivel de los micros
   const ganancias = {};
   const modoAudio = args.flags.audio === undefined ? 'auto' : String(args.flags.audio);
-  if (modoAudio !== 'off' && conMicro.length) {
+  // La voz de cada uno: su micro o, si falta, el sonido de su cámara (va también al montaje: ver multicam.js).
+  const voces = personas.map((p) => MC.fuenteDeVoz(p, probes)).filter(Boolean);
+  if (modoAudio !== 'off' && voces.length) {
     const objetivo = args.flags.lufs !== undefined ? Number(args.flags.lufs) : AN.OBJETIVO_LUFS;
     console.log(`\nnivel de los micrófonos (objetivo ${objetivo} LUFS):`);
-    for (const persona of conMicro) {
-      const v = AN.volumen(persona.mic);
+    for (const fuente of voces) {
+      const v = AN.volumen(fuente);
       if (v.error) {
-        console.log(`  ${MC.nombreBase(persona.mic).padEnd(22)} no se pudo medir (${v.error})`);
+        console.log(`  ${MC.nombreBase(fuente).padEnd(22)} no se pudo medir (${v.error})`);
         continue;
       }
       const g = AN.gananciaHacia(v.lufs, objetivo);
-      if (g.db !== 0) ganancias[persona.mic] = g.db;
-      console.log(`  ${MC.nombreBase(persona.mic).padEnd(22)} ${v.lufs.toFixed(1)} LUFS` +
+      if (g.db !== 0) ganancias[fuente] = g.db;
+      console.log(`  ${MC.nombreBase(fuente).padEnd(22)} ${v.lufs.toFixed(1)} LUFS` +
         ` -> ${g.db >= 0 ? '+' : ''}${g.db} dB${g.recortada ? '  (acotada; estaba muy lejos del objetivo)' : ''}`);
     }
   }
@@ -2080,6 +2086,33 @@ liberados ${gb(b.bytes)}`);
   return b.errores.length ? 1 : 0;
 }
 
+/*
+ * Junta una copia de rescate del Estudio («…_camara.resto-123456.mp4», lo que no llegó al servidor) con su
+ * archivo (el que sí llegó). Por omisión deja el resultado en lugar del archivo y guarda el de antes con
+ * «.sin-resto» delante de la extensión. Ver episodio.juntarCopia.
+ */
+function cmdJuntarCopia(args) {
+  const [principal, resto] = args._;
+  if (!principal || !resto) {
+    console.error('uso: node cli.js juntar-copia <archivo-del-servidor> <copia.resto-N.ext> [--out <archivo>]');
+    return 2;
+  }
+  for (const f of [principal, resto]) if (!exists(f)) throw new Error(`no existe ${f}`);
+  const salida = args.flags.out ? path.resolve(String(args.flags.out)) : path.resolve(principal);
+  const tmp = `${salida}.juntando`;
+  const r = EP.juntarCopia(principal, resto, tmp);
+  if (r.error) { fs.rmSync(tmp, { force: true }); console.error(`error: ${r.error}`); return 1; }
+  if (!args.flags.out) {
+    const ext = path.extname(principal);
+    const copia = `${principal.slice(0, -ext.length)}.sin-resto${ext}`;
+    fs.renameSync(principal, copia);
+    console.log(`el archivo de antes queda en ${copia}`);
+  }
+  fs.renameSync(tmp, salida);
+  console.log(`listo: ${salida} (${(r.bytes / 1048576).toFixed(1)} MB añadidos de la copia)`);
+  return 0;
+}
+
 /* `muestra` era la versión anterior de `revision`. */
 function cmdMuestra(args) {
   console.log('(muestra ahora se llama revision)\n');
@@ -2283,6 +2316,7 @@ function usage() {
   node cli.js youtube <carpeta>        subtítulos .srt, capítulos y descripción con los tiempos del vídeo final
   node cli.js shorts <carpeta>         shorts verticales con subtítulos, de los ★ marcados al grabar (o de «shorts»)
   node cli.js limpiar <carpeta>        libera disco cuando el episodio está hecho (sin --confirmar solo lo enseña)
+  node cli.js juntar-copia <archivo> <copia.resto-N>   junta una copia de rescate del Estudio con su archivo
   node cli.js importar [<carpeta>]     trae las sesiones del Estudio a originales/ (--copiar o --mover;
                                        --descargas para cogerlas de Descargas, --sesiones id,id para elegir)
   node cli.js config <carpeta>         configuración efectiva del episodio y de dónde sale (--tomar-de-raiz)
@@ -2352,6 +2386,7 @@ function main(argv) {
     youtube: cmdYoutube,
     shorts: cmdShorts,
     limpiar: cmdLimpiar,
+    'juntar-copia': cmdJuntarCopia,
     config: cmdConfig,
   };
 

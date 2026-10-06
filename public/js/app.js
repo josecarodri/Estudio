@@ -60,12 +60,12 @@
   const localNow = () => Clock.localNow();
   const serverNow = () => localNow() + state.clock.offset;
 
-  function toast(msg, kind = '') {
+  function toast(msg, kind = '', ms = 4000) {
     const el = $('#toast');
     el.textContent = msg;
     el.className = `toast show ${kind}`;
     clearTimeout(toast.t);
-    toast.t = setTimeout(() => { el.className = 'toast'; }, 4000);
+    toast.t = setTimeout(() => { el.className = 'toast'; }, ms);
   }
 
   function fmtBytes(n) {
@@ -1072,11 +1072,18 @@
       if (!state.rec && u.count) {
         const b = document.createElement('button');
         b.type = 'button'; b.className = 'link'; b.textContent = 'Descargar copia';
-        b.onclick = async () => downloadBlob(await u.toBlob(), u.fileName());
+        b.onclick = () => descargarCopia(u);
         row.querySelector('.upload-foot').appendChild(b);
       }
       box.appendChild(row);
     }
+  }
+
+  /** «Descargar copia»: el archivo de este dispositivo, o lo que falte en el servidor, y siempre se dice qué es. */
+  async function descargarCopia(u) {
+    const c = await u.copia();
+    if (c.aviso) toast(c.aviso, c.blob ? 'warn' : '', 12000);
+    if (c.blob) downloadBlob(c.blob, c.nombre);
   }
 
   function downloadBlob(blob, name) {
@@ -1159,7 +1166,7 @@
         if (!u.finishInfo) u.finishInfo = { startedAtServer: null, endedAtServer: null, recovered: true };
         u._kick();
       };
-      dl.onclick = async () => downloadBlob(await u.toBlob(), u.fileName());
+      dl.onclick = () => descargarCopia(u);
       rm.onclick = async () => { if (confirm('¿Borrar esta grabación del dispositivo?')) { await u.deleteLocal(); li.remove(); } };
       li.append(up, dl, rm);
       list.appendChild(li);
