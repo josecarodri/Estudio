@@ -13,12 +13,35 @@ const { spawn } = require('node:child_process');
 const pendientes = new Set();
 let resumen = '';
 
-/* Un PowerShell aparte, oculto, que no hace esperar a este proceso. */
+const codificado = (script) => Buffer.from(script, 'utf16le').toString('base64');
+
+/*
+ * Un PowerShell aparte, oculto, que no hace esperar a este proceso (unref). Sin `detached`: en Windows
+ * eso lo lanza sin consola y PowerShell 5.1 se cierra en ~0,1 s sin ejecutar nada (comprobado en el PC).
+ * Ojo: así queda en el job de libuv (KILL_ON_JOB_CLOSE) y muere en cuanto termina node. Vale para lo
+ * que dura lo que el proceso (el modo despierto); lo que deba seguir después, con powershellQueSobrevive.
+ */
 function powershell(script) {
-  const hijo = spawn('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { stdio: 'ignore', detached: true, windowsHide: true });
+  const hijo = spawn('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', codificado(script)],
+    { stdio: 'ignore', windowsHide: true });
   hijo.on('error', () => {});
   hijo.unref();
+  return hijo;
+}
+
+/*
+ * Un PowerShell que sigue vivo aunque node termine (la notificación dura 20 s y `episodio` sale enseguida):
+ * el hijo lanza el script en un nieto con Start-Process y se cierra. El job de libuv deja salir a los
+ * nietos (SILENT_BREAKAWAY_OK), así que no muere con node. Hasta que el hijo haya lanzado al nieto (unos
+ * segundos) node lo espera: con ref(), porque si no nada lo mantiene vivo y sale al vaciarse el bucle
+ * (pasaba: el hijo moría sin lanzarlo), y en esperarAvisos(), por si se llama a process.exit.
+ */
+function powershellQueSobrevive(script) {
+  const hijo = powershell(`Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand','${codificado(script)}'`);
+  hijo.ref();
+  const p = new Promise((resolve) => { hijo.on('exit', resolve); hijo.on('error', resolve); })
+    .finally(() => pendientes.delete(p));
+  pendientes.add(p);
   return hijo;
 }
 
@@ -69,7 +92,7 @@ function avisar(config, titulo, texto, opciones) {
   if (process.env.EDICION_SIN_AVISOS) return;
   if (a.windows !== false && process.platform === 'win32') {
     try {
-      powershell([
+      powershellQueSobrevive([
         'Add-Type -AssemblyName System.Windows.Forms',
         '$n = New-Object System.Windows.Forms.NotifyIcon',
         `$n.Icon = [System.Drawing.SystemIcons]::${o.error ? 'Error' : 'Information'}`,
@@ -95,7 +118,7 @@ function avisar(config, titulo, texto, opciones) {
   }
 }
 
-/* Espera, como mucho `ms`, a que salgan los avisos al móvil pendientes. */
+/* Espera, como mucho `ms`, a que salgan los avisos al móvil y a que la notificación de Windows quede lanzada. */
 function esperarAvisos(ms) {
   if (!pendientes.size) return Promise.resolve();
   return Promise.race([Promise.allSettled([...pendientes]), new Promise((r) => { setTimeout(r, ms || 12000).unref(); })]);
@@ -121,4 +144,4 @@ function duracionLegible(segundos) {
   return h ? `${h} h ${m} min` : `${m} min`;
 }
 
-module.exports = { mantenerDespierto, avisar, esperarAvisos, ponerResumen, tomarResumen, debeAvisar, duracionLegible, destinoNtfy, textoPs };
+module.exports = { powershell, powershellQueSobrevive, mantenerDespierto, avisar, esperarAvisos, ponerResumen, tomarResumen, debeAvisar, duracionLegible, destinoNtfy, textoPs };

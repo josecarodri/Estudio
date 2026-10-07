@@ -68,7 +68,8 @@ const CONFIG_POR_DEFECTO = {
   crf: 18,
   // Codificación del vídeo final. x264 con preset "medium" tarda ~1,7 veces menos que "slow" y el
   // archivo sale apenas un 2 % mayor (YouTube lo vuelve a codificar). "nvenc" usa la tarjeta gráfica:
-  // mucho más rápido; si falla, se repite solo con x264.
+  // medido en la GTX 1650 con 3 min del episodio y el color puesto, 79 s frente a 238 s, mismo tamaño y
+  // misma calidad (SSIM 0,9885 / 0,9890); el resto del tiempo es el filtro de color. Si falla, se repite solo con x264.
   codificador: 'x264',
   preset: 'medium',
   limpiarAudio: true,
@@ -524,10 +525,12 @@ function acabado(entrada, salida, config) {
 /*
  * Parámetros de vídeo del acabado. x264 es la referencia de calidad; NVENC (la tarjeta gráfica)
  * tarda una fracción. A YouTube le llega igual de bien: lo vuelve a codificar.
+ * Calidad de NVENC = crf + 4: con crf + 1 el archivo salía un 62 % mayor que el de x264 para la misma
+ * calidad; con + 4, igual de tamaño y de SSIM (medido en la GTX 1650).
  */
 function argumentosVideo(config, codificador) {
   if (codificador === 'nvenc') {
-    return ['-c:v', 'h264_nvenc', '-preset', 'p6', '-tune', 'hq', '-rc', 'vbr', '-cq', String(Number(config.crf) + 1),
+    return ['-c:v', 'h264_nvenc', '-preset', 'p6', '-tune', 'hq', '-rc', 'vbr', '-cq', String(Number(config.crf) + 4),
       '-b:v', '0', '-profile:v', 'high', '-pix_fmt', 'yuv420p'];
   }
   return ['-c:v', 'libx264', '-preset', String(config.preset || 'medium'), '-crf', String(config.crf), '-pix_fmt', 'yuv420p'];

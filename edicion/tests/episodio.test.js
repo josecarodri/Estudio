@@ -342,7 +342,7 @@ test('acabado: x264 con el preset de la configuración; NVENC solo si se pide', 
   assert.strictEqual(EP.CONFIG_POR_DEFECTO.codificador, 'x264');
   const n = EP.argumentosVideo({ crf: 18 }, 'nvenc');
   assert.strictEqual(n[1], 'h264_nvenc');
-  assert.strictEqual(n[n.indexOf('-cq') + 1], '19');
+  assert.strictEqual(n[n.indexOf('-cq') + 1], '22', 'crf + 4: mismo tamaño y calidad que x264 (medido)');
 });
 
 test('acabado: si NVENC no puede (sin tarjeta), repite con x264 y el vídeo sale igual', { skip: !hayFfmpeg }, () => {

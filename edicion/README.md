@@ -429,7 +429,9 @@ cambios) o `--descartar-cambios` (lo rehace desde la receta y guarda una copia, 
 
 **Acabado.** Segunda pasada con ffmpeg sobre el render de melt: highpass y compresor suaves, −14 LUFS en dos
 pasadas (pico −1 dBTP), color de acabado, H.264 crf 18 con el índice al principio. `codificador: "x264"` (preset
-`medium`) o `"nvenc"` (tarjeta gráfica; si falla, se repite solo con x264). El color de acabado y la limpieza de
+`medium`) o `"nvenc"` (tarjeta gráfica, calidad `crf + 4`; si falla, se repite solo con x264). Medido en la GTX 1650
+con 3 min del episodio y el color puesto: x264 238 s, nvenc 79 s (≈2 h frente a ≈40 min por episodio), mismo tamaño y
+misma calidad (SSIM 0,989); el resto del tiempo de nvenc es el filtro de color. El color de acabado y la limpieza de
 sonido no están en el `.kdenlive`: en Kdenlive se ve el montaje, no el aspecto final.
 
 **PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision`, `render`, `youtube` y `shorts` impiden que
