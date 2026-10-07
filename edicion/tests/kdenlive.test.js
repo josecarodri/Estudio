@@ -29,7 +29,8 @@ function tieneBinario(bin, flag) {
 }
 
 const HAY_FFMPEG = tieneBinario('ffmpeg') && tieneBinario('ffprobe');
-const HAY_MELT = tieneBinario('melt');
+// Como el programa: en Windows el melt de Kdenlive no está en el PATH.
+const HAY_MELT = Boolean(CLI.buscarBinario('melt'));
 
 /* Media ya "leída", para probar el generador sin tocar disco. */
 function mediaFalsa(frames) {

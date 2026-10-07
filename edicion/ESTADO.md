@@ -1,6 +1,6 @@
 # Estado de la edición del podcast (edicion/)
 
-Última sesión: 2026-10-06 (revisión del montaje y del Estudio; ver la sección de esa fecha).
+Última sesión: 2026-10-06 (comprobación en el PC: avisos arreglados, nvenc medido; ver «Comprobación en el PC»).
 
 ## Hecho
 - Generación de proyectos `.kdenlive` (documento 1.1, Kdenlive 26.8 detectado) y render con `melt`. El primer episodio se revisó abriéndolo en Kdenlive.
@@ -215,18 +215,37 @@ Otra IA revisó `main` (561cbcb) y encontró cuatro fallos; los cuatro se reprod
   nunca al ruido de uno alto. Ahora cada micro se mide respecto a su nivel típico de voz (percentil 90 de lo que pasa del
   ruido, aunque hable poco: si no, una interrupción corta suya contaba como muy fuerte).
 
+## Comprobación en el PC (2026-10-06, noche)
+- `doctor`: ffprobe, ffmpeg 9.0.2, melt y Kdenlive 26.8 (documento 1.1, composición qtblend). Whisper y RNNoise en
+  `D:\Datos\Herramientas`. El repo es un clon de git al día y la raíz de `Episodios` ya estaba limpia (el
+  `--tomar-de-raiz` se hizo a las 20:19: queda `episodio.json.copia-20261006-201940`).
+- **Avisos y modo despierto no funcionaban en Windows**: el PowerShell aparte se lanzaba con `detached`, y así
+  PowerShell 5.1 se cierra en ~0,1 s sin ejecutar nada (los fallos se callan a propósito, por eso no se notaba). Ahora
+  va sin `detached`: sigue vivo y `SetThreadExecutionState` responde bien.
+- **La notificación moría con node**: sin `detached`, libuv mete al hijo en su job (KILL_ON_JOB_CLOSE) y muere al
+  terminar node, y la notificación dura 20 s. Ahora (`powershellQueSobrevive`) el hijo la lanza en un nieto con
+  `Start-Process`, que no queda en el job (SILENT_BREAKAWAY_OK). Trampa: el hijo tiene que ir con `ref()`; con `unref`
+  nada mantenía vivo a node, salía al instante y el job mataba al hijo antes de lanzar al nieto. node espera así ~5 s
+  al terminar (lo que tarda PowerShell en arrancar). Comprobado: la notificación sigue viva 10 s después de salir node.
+  El modo despierto sigue con el hijo directo: debe morir con node. Pruebas en `avisos.test.js` (solo en Windows) que
+  fallan sin el nieto y sin el `ref()`.
+- **Las pruebas de render se saltaban en Windows**: buscaban melt en el PATH, y el de Kdenlive no está ahí. Ahora usan
+  `buscarBinario` como el programa: las 4 corren y pasan en el PC.
+- **nvenc medido** en la GTX 1650 con 3 min del episodio (minuto 20) y el color puesto: x264 `medium` 238 s (1,3 veces
+  el tiempo real: ≈2 h por episodio), nvenc 79 s (≈40 min); de esos 79 s, 67 son el filtro de color. Con `-cq` = crf + 1
+  salía un 62 % más pesado; con crf + 4 (ahora el valor), mismo tamaño (204 frente a 194 MB) y misma SSIM (0,9885 frente
+  a 0,9890). Jose vio las dos versiones y se ven bien las dos: **`"codificador": "nvenc"` puesto en el `episodio.json`
+  del equipo** (copia de antes: `episodio.json.copia-20261006-nvenc`). Ahorra ≈1 h 20 min por episodio.
+
 ## Pendiente
-1. **Una vez, en el PC**: actualizar `C:\Users\Carlos\Estudio` (mejor como clon de git) y abrir Claude Code ahí. Después
-   `node cli.js config "D:\Datos\Videos\Dos Tipos Promedio Podcast\Episodios\2026-10-03" --tomar-de-raiz`
-   para sacar de la raíz los cortes del primer episodio (deja copia de la raíz).
-2. Primer caso real de caída: revisar en Kdenlive el empalme jc → jc-2 y la llamada unida (`llamada-unida.json`).
-3. Probar `"codificador": "nvenc"` en la GTX 1650: tiempo del acabado y aspecto.
-4. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
+1. Primer caso real de caída: revisar en Kdenlive el empalme jc → jc-2 y la llamada unida (`llamada-unida.json`).
+2. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
    falta: con 0 se ve y se oye bien.
-5. En el primer episodio con todo esto: ver en el PC que salen el aviso de Windows y el modo despierto, que la
-   revisión llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no, `disimularCortes.segundos`).
-6. (Opcional) Aviso en el móvil: instalar ntfy y poner el tema en `avisos.ntfy` del `episodio.json` del equipo.
-7. En el primer episodio con lo nuevo: preguntar el pie de YouTube (equipo; los rótulos ya dicen «JC» y «DJ», decidido); ver en la
+3. En el primer episodio con todo esto: que Jose vea la notificación de Windows al terminar (el mecanismo está
+   comprobado en el PC, pero él no estaba delante), el tiempo real del acabado con nvenc en `estado`, que la revisión
+   llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no, `disimularCortes.segundos`).
+4. (Opcional) Aviso en el móvil: instalar ntfy y poner el tema en `avisos.ntfy` del `episodio.json` del equipo.
+5. En el primer episodio con lo nuevo: preguntar el pie de YouTube (equipo; los rótulos ya dicen «JC» y «DJ», decidido); ver en la
    revisión cómo quedan el plano doble y los rótulos; mirar `estado` tras el render (tiempos por fase) para decidir si
    subir `render.hilos`; comprobar que no salen avisos ⚠ de cámara en material bueno.
-8. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy, por el centro).
+6. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy, por el centro).

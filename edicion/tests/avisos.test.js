@@ -75,6 +75,35 @@ test('PC despierto: devuelve con qué soltarlo, y aquí (no es Windows) no lanza
   soltar();
 });
 
+test('Windows: el PowerShell aparte llega a ejecutarse (lanzado «detached» se cerraba sin hacer nada)',
+  { skip: process.platform !== 'win32' }, async () => {
+    const marca = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'avisos-ps-')), 'hecho.txt');
+    AV.powershell(`Start-Sleep -Milliseconds 500; 'si' | Out-File -Encoding ascii -FilePath '${AV.textoPs(marca)}'`);
+    const hasta = Date.now() + 15000;
+    while (!fs.existsSync(marca) && Date.now() < hasta) await new Promise((r) => setTimeout(r, 200));
+    assert.ok(fs.existsSync(marca), 'el script del PowerShell aparte no llegó a ejecutarse');
+  });
+
+test('Windows: la notificación sigue viva aunque node termine enseguida (sale sola o con process.exit)',
+  { skip: process.platform !== 'win32' }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'avisos-sobrevive-'));
+    // Como `episodio` al acabar: lanza y sale. El script escribe su marca 2 s después de empezar,
+    // cuando node ya terminó: sin el nieto (o si node no espera a lanzarlo) muere antes con el job de libuv.
+    const lanzar = (marca, conExit) => spawnSync(process.execPath, ['-e', `
+      const AV = require(${JSON.stringify(path.join(__dirname, '..', 'avisos.js'))});
+      AV.powershellQueSobrevive("Start-Sleep -Seconds 2; 'si' | Out-File -Encoding ascii -FilePath '" + AV.textoPs(${JSON.stringify(marca)}) + "'");
+      ${conExit ? 'AV.esperarAvisos(12000).then(() => process.exit(0));' : ''}
+    `], { timeout: 30000 });
+    const casos = [[path.join(dir, 'sola.txt'), false], [path.join(dir, 'exit.txt'), true]];
+    for (const [marca, conExit] of casos) {
+      assert.strictEqual(lanzar(marca, conExit).status, 0);
+      assert.ok(!fs.existsSync(marca), 'node no debe esperar al script entero, solo a que quede lanzado');
+    }
+    const hasta = Date.now() + 20000;
+    while (casos.some(([m]) => !fs.existsSync(m)) && Date.now() < hasta) await new Promise((r) => setTimeout(r, 250));
+    for (const [marca, conExit] of casos) assert.ok(fs.existsSync(marca), `el PowerShell murió con node (${conExit ? 'process.exit' : 'sale solo'})`);
+  });
+
 test('al terminar un comando largo se avisa con el episodio, cómo acabó y su resumen', { skip: !hayFfmpeg }, async () => {
   const SESION = require('./sesion-falsa.js');
   const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'avisos-'));
