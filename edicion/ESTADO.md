@@ -126,7 +126,7 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
   (llamada partida sintética de 60 s, guarda del proyecto, silencios confirmados, partes por sesión).
 
 ## Todo en un repo, solo Kdenlive (2026-10-06)
-- La edición estaba en el repo `Personal` (`tools/kdenlive-claude`), mezclada con la app de finanzas. Ahora vive aquí,
+- La edición estaba en el repo `Personal` (hoy `Finanzas`; `tools/kdenlive-claude`), mezclada con la app de finanzas. Ahora vive aquí,
   en `edicion/`, junto a la grabación: todo lo del podcast en un solo repo. En el PC se trabaja desde
   `C:\Users\Carlos\Estudio\edicion` y Claude Code se abre en `C:\Users\Carlos\Estudio` (ahí están el skill `/episodio` y el `CLAUDE.md`).
 - Las grabaciones se importan por defecto de `grabaciones/` de este mismo repo: ya no hay ruta fija del PC en el código.

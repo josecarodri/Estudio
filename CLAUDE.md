@@ -1,6 +1,6 @@
 # Notas para Claude — podcast «Dos Tipos Promedio»
 
-Todo lo del podcast vive en este repo: la **grabación** (el Estudio, estilo Riverside: `server.js`, `public/`, `lib/`, `tools/alinear.js`) y la **edición** (`edicion/`: monta el episodio en Kdenlive a partir de lo grabado y lo deja listo para YouTube). La app de finanzas está en otro repo (`Personal`) y no tiene nada que ver con esto.
+Todo lo del podcast vive en este repo: la **grabación** (el Estudio, estilo Riverside: `server.js`, `public/`, `lib/`, `tools/alinear.js`) y la **edición** (`edicion/`: monta el episodio en Kdenlive a partir de lo grabado y lo deja listo para YouTube). La app de finanzas está en otro repo (`Finanzas`, antes `Personal`) y no tiene nada que ver con esto.
 
 - Responder en español.
 - **Editar un episodio**: usa el skill **`/episodio`** (`.claude/skills/episodio/SKILL.md`). Trae el proceso fijo, las rutas, lo ya decidido y las trampas. No redescubras nada de eso y no leas transcripciones enteras: usa `analizar`, `verificar` y `estado`. Estado y decisiones técnicas de la edición: `edicion/ESTADO.md`.
