@@ -55,6 +55,9 @@ const CONFIG_POR_DEFECTO = {
   camaras: { activo: true, congelada: 4, negro: 2, tolerancia: 0.0003 },
   // YouTube: el texto fijo del final de la descripción (enlaces a las plataformas, redes…) y las etiquetas.
   youtube: { pie: '', etiquetas: [] },
+  // El episodio en audio (entrega/<fecha>.mp3) para Spotify en audio, Apple Podcasts, iVoox…: MP3 a 44,1 kHz y
+  // `kbps`, con el mismo sonido que el vídeo, título, `artista` y los capítulos de YouTube.
+  podcast: { activo: true, kbps: 192, artista: 'Dos Tipos Promedio' },
   // Tramos a quitar siempre, en segundos del reloj de la llamada: [["2:02", "2:34"]].
   cortes: [],
   // Limpieza de un micro en un tramo: [{ persona: "jc", desde: 640, hasta: 730 }].
@@ -193,11 +196,15 @@ function agruparPartes(carpeta) {
     }));
 }
 
-/* La configuración de una parte: lo general, con lo propio de esa parte por encima. */
+/*
+ * La configuración de una parte: lo general, con lo propio de esa parte por encima. Los objetos
+ * (silencios, planoDoble…) campo a campo, como en las capas de la configuración: una parte con
+ * `silencios: { min: 6 }` conserva el resto de los ajustes de silencios. Los cortes se suman.
+ */
 function configDeParte(config, id) {
   const propia = (config.partes || {})[id] || {};
   const cortes = [...(config.cortes || []), ...(propia.cortes || [])];
-  return { ...config, ...propia, cortes };
+  return { ...fusionar(config, propia), cortes };
 }
 
 /*
@@ -417,6 +424,33 @@ function filtrosAudio(config) {
 
 const MODELO_RNNOISE = 'D:/Datos/Herramientas/rnnoise/sh.rnnn';
 
+/* Los filtros de ffmpeg de una limpieza (ver limpiarMicro) y el modelo de RNNoise si hace falta. */
+function filtrosDeLimpieza(ventanas, config) {
+  const lista = Array.isArray(ventanas) ? ventanas : [ventanas];
+  const modelo = (config && config.rnnoise) || MODELO_RNNOISE;
+  // Una sola instancia de cada filtro, activa en cualquiera de sus ventanas.
+  const activo = (vs) => `enable='${vs.map((v) => `between(t,${Number(v.desde)},${Number(v.hasta)})`).join('+')}'`;
+  const conIa = lista.filter((v) => v.ia !== false);
+  const conPuerta = lista.filter((v) => v.puerta !== false);
+  const filtros = [];
+  // El modelo va por nombre y se ejecuta desde su carpeta: la ruta con "C:" rompe el filtro.
+  if (conIa.length) filtros.push(`arnndn=m=${path.basename(modelo)}:${activo(conIa)}`);
+  if (conPuerta.length) filtros.push(`agate=threshold=0.01:ratio=4:range=0.06:attack=15:release=300:${activo(conPuerta)}`);
+  return { filtros, modelo: conIa.length ? modelo : null };
+}
+
+/*
+ * Firma de una limpieza, para el nombre del WAV limpio (se reutiliza mientras no cambie). Cambia si cambia
+ * lo que saldría: el micro original (tamaño y fecha: p. ej. tras juntarle una copia de rescate), los
+ * tramos y filtros, o el modelo de RNNoise.
+ */
+function firmaDeLimpieza(entrada, ventanas, config) {
+  const archivo = (f) => { try { const s = fs.statSync(f); return [path.resolve(f), s.size, Math.round(s.mtimeMs)]; } catch { return [path.resolve(f)]; } };
+  const { filtros, modelo } = filtrosDeLimpieza(ventanas, config);
+  return require('node:crypto').createHash('sha1')
+    .update(JSON.stringify({ origen: archivo(entrada), filtros, modelo: modelo && archivo(modelo) })).digest('hex').slice(0, 8);
+}
+
 /*
  * Limpia un micro solo dentro de unas ventanas (por ejemplo, un llanto de fondo que se
  * oye bajo la voz): reducción de ruido con IA (RNNoise) y una puerta que baja el micro
@@ -425,43 +459,67 @@ const MODELO_RNNOISE = 'D:/Datos/Herramientas/rnnoise/sh.rnnn';
  * `ventanas`: [{ desde, hasta, ia, puerta }] en segundos del propio archivo (o una sola).
  */
 function limpiarMicro(entrada, salida, ventanas, config) {
-  const lista = Array.isArray(ventanas) ? ventanas : [ventanas];
-  const modelo = (config && config.rnnoise) || MODELO_RNNOISE;
-  // Una sola instancia de cada filtro, activa en cualquiera de sus ventanas.
-  const activo = (vs) => `enable='${vs.map((v) => `between(t,${Number(v.desde)},${Number(v.hasta)})`).join('+')}'`;
-  const conIa = lista.filter((v) => v.ia !== false);
-  const conPuerta = lista.filter((v) => v.puerta !== false);
-  const filtros = [];
-  if (conIa.length) {
-    if (!fs.existsSync(modelo)) return { error: `falta el modelo de RNNoise: ${modelo}` };
-    // El modelo va por nombre y se ejecuta desde su carpeta: la ruta con "C:" rompe el filtro.
-    filtros.push(`arnndn=m=${path.basename(modelo)}:${activo(conIa)}`);
-  }
-  if (conPuerta.length) filtros.push(`agate=threshold=0.01:ratio=4:range=0.06:attack=15:release=300:${activo(conPuerta)}`);
+  const { filtros, modelo } = filtrosDeLimpieza(ventanas, config);
+  if (modelo && !fs.existsSync(modelo)) return { error: `falta el modelo de RNNoise: ${modelo}` };
   if (!filtros.length) return { error: 'la limpieza no tiene ningún filtro activo' };
 
   fs.mkdirSync(path.dirname(salida), { recursive: true });
+  // Se escribe aparte y se cambia de nombre al acabar: un WAV a medias (ffmpeg interrumpido) con el nombre
+  // definitivo se reutilizaría la próxima vez como si estuviera bien.
+  const tmp = `${path.resolve(salida)}.haciendo.wav`;
   // Solo hace falta ejecutarlo desde la carpeta del modelo si se usa RNNoise; con la puerta sola,
   // esa carpeta puede ni existir.
   const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', path.resolve(entrada), '-af', filtros.join(','),
-    '-c:a', 'pcm_s16le', path.resolve(salida)],
-  { ...(conIa.length ? { cwd: path.dirname(modelo) } : {}), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (res.status !== 0) return { error: `ffmpeg falló: ${(res.stderr || (res.error && res.error.message) || '').trim().split('\n').slice(-3).join(' ')}` };
+    '-c:a', 'pcm_s16le', tmp],
+  { ...(modelo ? { cwd: path.dirname(modelo) } : {}), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (res.status !== 0) {
+    fs.rmSync(tmp, { force: true });
+    return { error: `ffmpeg falló: ${(res.stderr || (res.error && res.error.message) || '').trim().split('\n').slice(-3).join(' ')}` };
+  }
+  fs.renameSync(tmp, path.resolve(salida));
   return { salida };
 }
 
-/* Cadena de filtros de color del acabado; vacía si está desactivado. */
-function filtrosVideo(config) {
+/*
+ * Cadena de filtros de color del acabado; vacía si está desactivado.
+ *   - eq va delante, en YUV (como llega el vídeo), y curves, vibrance y colorbalance juntos en RGB: con eq en medio,
+ *     ffmpeg convertía la imagen 4 veces por fotograma (YUV→RGB→YUV→RGB→YUV) y ahora 2. Medido en 1080p: el filtro
+ *     tarda un 45 % menos y la imagen sale igual (PSNR 59,8 dB frente al orden de antes; sin el color, 32,8).
+ *   - Las dos conversiones dicen su matriz (`matriz`: la del vídeo, BT.709 en HD). Si no, ffmpeg leía la de la
+ *     etiqueta del render de melt (BT.709) para pasar a RGB y volvía con la de por defecto (BT.601): los colores
+ *     se desplazaban un poco (la piel algo más cálida, los rojos más intensos). Ahora salen como en la cámara.
+ */
+function filtrosVideo(config, opciones) {
   const c = config.color;
   if (!c || c.activo === false) return [];
-  const f = [];
-  if (c.curvas) f.push(`curves=${c.curvas}`);
-  else if (c.contraste) f.push(`curves=preset=${c.contraste}`);
-  f.push(`eq=saturation=${c.saturacion}:gamma=${c.gamma}:brightness=${c.brillo}`);
-  if (c.vibrance) f.push(`vibrance=intensity=${c.vibrance}`);
-  if (c.equilibrio) f.push(`colorbalance=${c.equilibrio}`);
+  const matriz = (opciones && opciones.matriz) || 'bt709';
+  const f = [`eq=saturation=${c.saturacion}:gamma=${c.gamma}:brightness=${c.brillo}`];
+  const rgb = [];
+  if (c.curvas) rgb.push(`curves=${c.curvas}`);
+  else if (c.contraste) rgb.push(`curves=preset=${c.contraste}`);
+  if (c.vibrance) rgb.push(`vibrance=intensity=${c.vibrance}`);
+  if (c.equilibrio) rgb.push(`colorbalance=${c.equilibrio}`);
+  if (rgb.length) {
+    f.push(`scale=in_color_matrix=${matriz}:in_range=tv,format=rgb24`, ...rgb, `scale=out_color_matrix=${matriz}:out_range=tv,format=yuv420p`);
+  }
   return f;
 }
+
+/*
+ * Espacio de color de un vídeo, para convertirlo bien y etiquetar la salida: { matriz (la de scale de ffmpeg),
+ * etiquetas (argumentos de ffmpeg) }. melt etiqueta sus render en HD como BT.709; sin etiqueta, se supone BT.709
+ * desde 720 líneas (lo que suponen los reproductores) y BT.601 por debajo.
+ */
+function colorDelVideo(archivo) {
+  const r = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=color_space,height', '-of', 'json', archivo], { encoding: 'utf8' });
+  let s = {};
+  try { s = (JSON.parse(r.stdout || '{}').streams || [])[0] || {}; } catch { /* sin datos: por defecto */ }
+  const sinEtiqueta = !s.color_space || s.color_space === 'unknown';
+  const sd = ['smpte170m', 'bt470bg'].includes(s.color_space) || (sinEtiqueta && Number(s.height) > 0 && Number(s.height) < 720);
+  return sd ? COLOR_SD : COLOR_HD;
+}
+const COLOR_HD = { matriz: 'bt709', etiquetas: ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv'] };
+const COLOR_SD = { matriz: 'bt601', etiquetas: ['-colorspace', 'smpte170m', '-color_primaries', 'smpte170m', '-color_trc', 'smpte170m', '-color_range', 'tv'] };
 
 /* Primera pasada de loudnorm: mide, sin escribir nada. */
 function medirVolumen(entrada, filtros, config) {
@@ -481,9 +539,15 @@ function medirVolumen(entrada, filtros, config) {
   }
 }
 
+/* Segunda pasada de loudnorm, con lo medido en la primera: es lo que lo hace exacto en lugar de aproximado. */
+function normalizado(config, medida) {
+  return `loudnorm=I=${config.lufsEntrega}:TP=${config.picoVerdadero}:LRA=11`
+    + `:measured_I=${medida.i}:measured_TP=${medida.tp}:measured_LRA=${medida.lra}`
+    + `:measured_thresh=${medida.thresh}:offset=${medida.offset}:linear=true`;
+}
+
 /*
- * Segunda pasada: aplica los filtros y el normalizado con los valores medidos, que es
- * lo que lo hace exacto en lugar de aproximado.
+ * Segunda pasada: aplica los filtros y el normalizado con los valores medidos.
  */
 function acabado(entrada, salida, config) {
   const filtros = filtrosAudio(config);
@@ -492,21 +556,22 @@ function acabado(entrada, salida, config) {
   if (medida.error) return { error: medida.error };
   console.log(`  antes: ${medida.i} LUFS · pico ${medida.tp} dBTP`);
 
-  const ln = `loudnorm=I=${config.lufsEntrega}:TP=${config.picoVerdadero}:LRA=11`
-    + `:measured_I=${medida.i}:measured_TP=${medida.tp}:measured_LRA=${medida.lra}`
-    + `:measured_thresh=${medida.thresh}:offset=${medida.offset}:linear=true`;
-  const af = [...filtros, ln].join(',');
+  // Sin listas de edición, el reproductor ya no se salta el silencio con que empieza el AAC (1024 muestras, 21 ms):
+  // se quitan 21 ms del principio para que el sonido siga cayendo exacto con la imagen.
+  const af = [`atrim=start=${PRIMING_AAC_S}`, 'asetpts=PTS-STARTPTS', ...filtros, normalizado(config, medida)].join(',');
 
   fs.mkdirSync(path.dirname(salida), { recursive: true });
+  const color = colorDelVideo(entrada);
+  const vf = filtrosVideo(config, color);
   const codificar = (codificador) => {
-    console.log(`codificando para YouTube (${codificador}) → ${salida}`);
+    console.log(`codificando para YouTube y Spotify (${codificador}) → ${salida}`);
     return spawnSync('ffmpeg', [
       '-y', '-hide_banner', '-loglevel', 'error', '-stats',
       '-i', entrada,
-      ...(filtrosVideo(config).length ? ['-vf', filtrosVideo(config).join(',')] : []),
-      ...argumentosVideo(config, codificador),
+      ...(vf.length ? ['-vf', vf.join(',')] : []),
+      ...argumentosVideo(config, codificador), ...color.etiquetas,
       '-af', af, '-ar', '48000', '-c:a', 'aac', '-b:a', '256k',
-      '-movflags', '+faststart',
+      ...MP4_SIN_LISTAS_DE_EDICION,
       salida,
     ], { encoding: 'utf8', stdio: ['ignore', 'inherit', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
   };
@@ -520,6 +585,76 @@ function acabado(entrada, salida, config) {
   }
   if (res.status !== 0) return { error: (res.stderr || 'ffmpeg falló').split('\n').slice(-6).join('\n') };
   return { medida, codificador };
+}
+
+/*
+ * MP4 sin listas de edición («edit lists»), que Spotify no admite en los vídeos de podcast (y pide que la primera
+ * imagen esté a menos de 50 ms del 0). ffmpeg las pone para no enseñar el retraso de los fotogramas B ni el
+ * silencio inicial del AAC (PRIMING_AAC_S); sin ellas, la imagen sigue empezando en 0 (marcas de tiempo negativas en
+ * los B) y ese silencio se compensa quitando lo mismo del principio del sonido (ver acabado). Con «faststart» el
+ * índice va al principio: empieza a verse sin bajarlo entero.
+ */
+const MP4_SIN_LISTAS_DE_EDICION = ['-use_editlist', '0', '-movflags', '+faststart+negative_cts_offsets'];
+const PRIMING_AAC_S = 1024 / 48000;
+
+/*
+ * El episodio en audio para las plataformas de podcast (Spotify en audio, Apple Podcasts, iVoox…): MP3 a 44,1 kHz
+ * con el mismo sonido que el vídeo (los mismos filtros y el mismo normalizado, con la medida del acabado si se
+ * pasa). Sale del render en bruto, no del vídeo final: así no se recomprime un AAC. Título y capítulos se le
+ * ponen aparte (etiquetarPodcast), sin volver a codificar. Devuelve { salida } o { error }.
+ */
+function audioPodcast(entrada, salida, config, medidaDelAcabado) {
+  const pc = { ...CONFIG_POR_DEFECTO.podcast, ...(config.podcast || {}) };
+  const filtros = filtrosAudio(config);
+  const medida = medidaDelAcabado || medirVolumen(entrada, filtros, config);
+  if (medida.error) return { error: medida.error };
+  fs.mkdirSync(path.dirname(salida), { recursive: true });
+  const tmp = `${path.resolve(salida)}.haciendo.mp3`;
+  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', entrada, '-vn', '-af', [...filtros, normalizado(config, medida)].join(','),
+    '-ar', '44100', '-c:a', 'libmp3lame', '-b:a', `${Number(pc.kbps) || 192}k`, '-id3v2_version', '3', tmp],
+  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (res.status !== 0) {
+    fs.rmSync(tmp, { force: true });
+    return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
+  }
+  fs.renameSync(tmp, path.resolve(salida));
+  return { salida };
+}
+
+/* Texto para un archivo de metadatos de ffmpeg (;FFMETADATA1): =, ;, #, \ y los saltos de línea van escapados. */
+const textoMetadatos = (t) => String(t).replace(/[=;#\\\n]/g, (c) => `\\${c}`);
+
+/*
+ * Pone título, autor y capítulos al MP3 del podcast sin volver a codificarlo (segundos). Los capítulos son los
+ * de YouTube ({ t, titulo }, en segundos del vídeo final, que dura lo mismo que el audio); los leen Apple Podcasts
+ * y otros reproductores (Spotify toma los de la descripción). datos: { titulo, capitulos, duracion }.
+ */
+function etiquetarPodcast(archivo, config, datos) {
+  const pc = { ...CONFIG_POR_DEFECTO.podcast, ...(config.podcast || {}) };
+  const d = datos || {};
+  const lineas = [';FFMETADATA1', `title=${textoMetadatos(d.titulo || path.basename(archivo, path.extname(archivo)))}`];
+  if (pc.artista) lineas.push(`artist=${textoMetadatos(pc.artista)}`, `album=${textoMetadatos(pc.artista)}`);
+  lineas.push('genre=Podcast');
+  const caps = (d.capitulos || []).filter((c) => Number.isFinite(c.t)).sort((a, b) => a.t - b.t);
+  caps.forEach((c, i) => {
+    const fin = i + 1 < caps.length ? caps[i + 1].t : Number(d.duracion) || c.t + 1;
+    lineas.push('[CHAPTER]', 'TIMEBASE=1/1000', `START=${Math.round(c.t * 1000)}`, `END=${Math.round(fin * 1000)}`, `title=${textoMetadatos(c.titulo)}`);
+  });
+  const meta = `${path.resolve(archivo)}.meta.txt`;
+  const tmp = `${path.resolve(archivo)}.etiquetando.mp3`;
+  fs.writeFileSync(meta, `${lineas.join('\n')}\n`, 'utf8');
+  try {
+    const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', archivo, '-f', 'ffmetadata', '-i', meta, '-map', '0:a', '-map_metadata', '1',
+      '-map_chapters', '1', '-c', 'copy', '-id3v2_version', '3', tmp], { encoding: 'utf8' });
+    if (res.status !== 0) {
+      fs.rmSync(tmp, { force: true });
+      return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
+    }
+    fs.renameSync(tmp, path.resolve(archivo));
+    return { capitulos: caps.length };
+  } finally {
+    fs.rmSync(meta, { force: true });
+  }
 }
 
 /*
@@ -552,6 +687,38 @@ function finDeCabecera(buf) {
   }
   const i = buf.indexOf(Buffer.from([0x1f, 0x43, 0xb6, 0x75]));
   return i > 0 ? i : null;
+}
+
+/*
+ * ¿Lleva el MP4 listas de edición (moov → trak → edts)? Spotify no las admite. null si no se puede leer. Solo
+ * se leen las cabeceras de las cajas, no el vídeo.
+ */
+function tieneListasDeEdicion(archivo) {
+  let fd;
+  try { fd = fs.openSync(archivo, 'r'); } catch { return null; }
+  try {
+    const total = fs.fstatSync(fd).size;
+    const cab = Buffer.alloc(16);
+    const caja = (pos) => {
+      if (fs.readSync(fd, cab, 0, 16, pos) < 8) return null;
+      let tam = cab.readUInt32BE(0);
+      let h = 8;
+      if (tam === 1) { tam = Number(cab.readBigUInt64BE(8)); h = 16; } else if (tam === 0) tam = total - pos;
+      return { tam, h, tipo: cab.toString('latin1', 4, 8) };
+    };
+    const hay = (desde, hasta, ruta) => {
+      for (let pos = desde; pos + 8 <= hasta;) {
+        const c = caja(pos);
+        if (!c || c.tam < 8) return false;
+        if (c.tipo === ruta[0] && (ruta.length === 1 || hay(pos + c.h, pos + c.tam, ruta.slice(1)))) return true;
+        pos += c.tam;
+      }
+      return false;
+    };
+    return hay(0, total, ['moov', 'trak', 'edts']);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /*
@@ -603,6 +770,7 @@ function juntarCopia(principal, resto, salida) {
 module.exports = {
   juntarCopia,
   finDeCabecera,
+  tieneListasDeEdicion,
   SUBCARPETAS,
   CONFIG_POR_DEFECTO,
   CLAVES_DEL_EPISODIO,
@@ -617,6 +785,7 @@ module.exports = {
   fechaHoy,
   agruparPartes,
   configDeParte,
+  firmaDeLimpieza,
   rutas,
   crearEstructura,
   fusionar,
@@ -630,8 +799,14 @@ module.exports = {
   tomarDeRaiz,
   filtrosAudio,
   filtrosVideo,
+  colorDelVideo,
+  COLOR_HD,
+  MP4_SIN_LISTAS_DE_EDICION,
   argumentosVideo,
   limpiarMicro,
   medirVolumen,
   acabado,
+  normalizado,
+  audioPodcast,
+  etiquetarPodcast,
 };

@@ -200,3 +200,47 @@ test('si el servidor se cayó entre guardar un trozo y apuntarlo, al reanudar no
     assert.strictEqual(fs.statSync(archivo).size, 44 + 2 * 9600);
   } finally { b.parar(); }
 });
+
+test('un trozo que no se pudo apuntar no se confirma: el reintento lo guarda y sobrevive a un reinicio', async () => {
+  const server = await listen();
+  const port = server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  let sesion;
+  let archivo;
+  try {
+    const g = await grabando(base, 'apuntar');
+    sesion = g.sesion;
+    const reg = await wav(base, 'apuntar', sesion);
+    archivo = path.join(process.env.GRABACIONES_DIR, 'apuntar', sesion, reg.json.file);
+    const progreso = path.join(path.dirname(archivo), `.${reg.json.file}.seq`);
+    assert.strictEqual((await envioLento(port, 'apuntar', sesion, 0, Buffer.alloc(9600, 1), 1)).status, 200);
+    // El registro de progreso no se puede escribir (disco lleno, antivirus…): en su sitio hay una carpeta.
+    const bueno = fs.readFileSync(progreso);
+    fs.rmSync(progreso);
+    fs.mkdirSync(progreso);
+    fs.writeFileSync(path.join(progreso, 'x'), '');
+    const fallo = await envioLento(port, 'apuntar', sesion, 1, Buffer.alloc(9600, 2), 1);
+    assert.notStrictEqual(fallo.status, 200, 'sin apuntarlo no se confirma');
+    assert.strictEqual(fs.statSync(archivo).size, 44 + 9600, 'lo escrito de ese trozo se quita');
+    assert.strictEqual(fs.readFileSync(archivo).readUInt32LE(40), 9600, 'la cabecera del WAV vuelve a su tamaño');
+    // Se arregla y la página reintenta: se guarda de verdad, no se toma por repetido.
+    fs.rmSync(progreso, { recursive: true });
+    fs.writeFileSync(progreso, bueno);
+    const otra = await envioLento(port, 'apuntar', sesion, 1, Buffer.alloc(9600, 2), 1);
+    assert.strictEqual(otra.status, 200);
+    assert.ok(!otra.json.duplicate, 'el reintento se guarda');
+    assert.strictEqual(otra.json.nextSeq, 2);
+    g.ws.close();
+  } finally {
+    server.closeAllConnections(); server.close();
+  }
+  // Tras reiniciar el servidor, los dos trozos siguen ahí.
+  const b = await otroServidor();
+  try {
+    const reg = await wav(b.base, 'apuntar', sesion);
+    assert.strictEqual(reg.json.nextSeq, 2);
+    const datos = fs.readFileSync(archivo);
+    assert.strictEqual(datos.length, 44 + 2 * 9600);
+    assert.strictEqual(datos[44 + 9600], 2);
+  } finally { b.parar(); }
+});

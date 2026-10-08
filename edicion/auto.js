@@ -194,7 +194,8 @@ function estado(carpeta) {
 // ------------------------------------------------------------------ huella (evita repetir el análisis largo)
 function huellaDeParte(parte, cfg) {
   const archivos = parte.archivos.map((f) => { const s = fs.statSync(f); return [path.basename(f), s.size, Math.round(s.mtimeMs)]; });
-  const ajustes = { desde: cfg.desde, hasta: cfg.hasta, audioOffset: cfg.audioOffset, minShot: cfg.minShot, lufs: cfg.lufsMicros, v: 1 };
+  // v: versión del reparto de cámaras; se sube cuando cambia cómo se calcula (v2: el plano mínimo se cumple siempre).
+  const ajustes = { desde: cfg.desde, hasta: cfg.hasta, audioOffset: cfg.audioOffset, minShot: cfg.minShot, lufs: cfg.lufsMicros, v: 2 };
   return crypto.createHash('sha1').update(JSON.stringify({ archivos, ajustes })).digest('hex').slice(0, 16);
 }
 
@@ -455,14 +456,23 @@ function ffmpegTexto(args) {
   return `${res.stdout || ''}${res.stderr || ''}`;
 }
 
+/*
+ * Lo que se oye en un tramo del vídeo final, con Whisper. { texto } o { sinComprobar: motivo } si no se pudo
+ * (sin Whisper, o falló la extracción o la transcripción): eso no es un fallo del vídeo, pero tampoco un acierto.
+ */
 function transcribirFragmento(final, desde, dur, config) {
   const aj = TR.ajustes(config);
-  if (TR.comprobar(aj).length) return null;
+  if (TR.comprobar(aj).length) return { sinComprobar: 'no hay Whisper' };
   const tmp = path.join(require('node:os').tmpdir(), `verif-${process.pid}-${Math.round(desde)}.wav`);
-  spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', String(desde), '-t', String(dur), '-i', final, '-vn', '-ac', '1', '-ar', '16000', tmp]);
-  const res = spawnSync(aj.cli, ['-m', aj.modelo, '-f', tmp, '-l', aj.idioma, '-fa', '-np', '-nt', ...(aj.extra || []).map(String)], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-  fs.rmSync(tmp, { force: true });
-  return A.norm(res.stdout || '');
+  try {
+    const ex = spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', String(desde), '-t', String(dur), '-i', final, '-vn', '-ac', '1', '-ar', '16000', tmp]);
+    if (ex.status !== 0 || !existe(tmp)) return { sinComprobar: 'no se pudo sacar el audio del vídeo' };
+    const res = spawnSync(aj.cli, ['-m', aj.modelo, '-f', tmp, '-l', aj.idioma, '-fa', '-np', '-nt', ...(aj.extra || []).map(String)], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    if (res.status !== 0) return { sinComprobar: 'Whisper falló' };
+    return { texto: A.norm(res.stdout || '') };
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 /** ¿Cuántas de las palabras esperadas aparecen en el texto oído? */
@@ -473,6 +483,20 @@ function coincidencia(esperadas, oido) {
   return lista.filter((w) => set.has(w)).length / lista.length;
 }
 
+/* Integrado (LUFS) y pico verdadero (dBTP) del resumen de ebur128; NaN lo que no esté. */
+function leerEbur128(texto) {
+  const resumen = String(texto).split('Summary:')[1] || '';
+  return {
+    lufs: Number((/I:\s+(-?[\d.]+) LUFS/.exec(resumen) || [])[1]),
+    pico: Number((/True peak:\s+Peak:\s+(-?[\d.]+|-inf) dBFS/.exec(resumen) || [])[1]),
+  };
+}
+
+/*
+ * Comprueba el vídeo final. Cada comprobación sale de tres maneras, y no se confunden: ✔ (bien), ✘ (mal: cuenta
+ * en `fallos`) y «? sin comprobar» (no se pudo medir: ffmpeg no sacó el audio, no hay Whisper…; cuenta en
+ * `sinComprobar`). Antes, un audio que no se podía leer daba «✔ sin pitidos».
+ */
 function verificar(carpeta) {
   const r = EP.rutas(carpeta);
   const nombre = path.basename(r.base);
@@ -480,12 +504,15 @@ function verificar(carpeta) {
   const { config } = EP.cargarConfig(r.base);
   const lineas = [];
   let fallos = 0;
+  let sinComprobar = 0;
   const ok = (cond, bien, mal) => { lineas.push(`${cond ? '✔' : '✘'} ${cond ? bien : mal}`); if (!cond) fallos += 1; };
   const aviso = (txt) => lineas.push(`· ${txt}`);
+  const noComprobado = (txt) => { lineas.push(`? sin comprobar: ${txt}`); sinComprobar += 1; };
 
   if (!existe(final)) throw new Error(`no existe el vídeo final: ${final}`);
-  const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_name,width,height', '-of', 'json', final], { encoding: 'utf8' });
-  const info = JSON.parse(probe.stdout || '{}');
+  const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_name,codec_type,width,height,start_time', '-of', 'json', final], { encoding: 'utf8' });
+  let info = {};
+  try { info = JSON.parse(probe.stdout || '{}'); } catch { /* se queda vacío: falla el formato */ }
   const dur = Number(info.format && info.format.duration) || 0;
   const rec = existe(path.join(r.montaje, 'episodio.json')) ? leerJson(path.join(r.montaje, 'episodio.json')) : null;
   const origenBruto = path.join(r.montaje, 'episodio-bruto.origen');
@@ -496,18 +523,47 @@ function verificar(carpeta) {
     const esperada = CUT.duracionFrames(rec) / Number(rec.project.fps);
     ok(Math.abs(dur - esperada) <= 1.5, `duración ${reloj(dur)} (esperada ${reloj(esperada)})`, `duración ${reloj(dur)} pero el proyecto dura ${reloj(esperada)}`);
   } else aviso(`duración ${reloj(dur)} (no hay proyecto con qué comparar)`);
-  const v = (info.streams || []).find((s) => s.width);
-  ok(!!v && !!(info.streams || []).find((s) => s.codec_name === 'aac'), `formato ${v ? `${v.width}x${v.height}` : '?'} con audio`, 'falta el vídeo o el audio');
+  const v = (info.streams || []).find((x) => x.width);
+  const hayAudio = (info.streams || []).some((x) => x.codec_type === 'audio' || x.codec_name === 'aac');
+  ok(!!v && hayAudio && (info.streams || []).some((x) => x.codec_name === 'aac'), `formato ${v ? `${v.width}x${v.height}` : '?'} con audio`,
+    !v ? 'no se puede leer el vídeo' : !hayAudio ? 'el vídeo no tiene audio' : 'el audio no es AAC');
 
+  // El episodio en audio (Spotify en audio, Apple Podcasts…): que esté y que dure lo mismo que el vídeo.
+  const mp3 = path.join(r.entrega, `${nombre}.mp3`);
+  if (existe(mp3)) {
+    const dm = Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', mp3], { encoding: 'utf8' }).stdout);
+    if (!Number.isFinite(dm) || !dm) noComprobado(`el audio del podcast (no se pudo leer ${path.basename(mp3)})`);
+    else ok(Math.abs(dm - dur) <= 1, `audio del podcast: ${path.basename(mp3)} (${reloj(dm)})`, `el audio del podcast dura ${reloj(dm)} y el vídeo ${reloj(dur)}`);
+  } else if ((config.podcast || {}).activo !== false) aviso('no hay audio del podcast (MP3): se hace en el acabado');
+
+  // Lo que pide Spotify a un vídeo de podcast y el MP4 de ffmpeg no cumplía: sin listas de edición y la primera
+  // imagen a menos de 50 ms del principio (ver episodio.MP4_SIN_LISTAS_DE_EDICION).
+  const listas = EP.tieneListasDeEdicion(final);
+  const inicioVideo = Number(v && v.start_time);
+  if (listas === null || !Number.isFinite(inicioVideo)) noComprobado('lo que pide Spotify (no se pudo leer el MP4)');
+  else {
+    ok(!listas && Math.abs(inicioVideo) <= 0.05, 'apto para Spotify (sin listas de edición, la imagen empieza en 0)',
+      `no es apto para Spotify: ${listas ? 'lleva listas de edición' : `la imagen empieza a ${inicioVideo.toFixed(3)} s`} (repite el acabado: node cli.js episodio <carpeta> --reanudar)`);
+  }
+
+  // Volumen (−14 LUFS) y pico verdadero (que no pase del límite: al recodificarlo YouTube o Spotify, un pico
+  // por encima satura). El AAC puede subir el pico unas décimas sobre lo que dejó loudnorm: se tolera 0,5 dB.
   const eb = ffmpegTexto(['-hide_banner', '-nostats', '-i', final, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-']);
-  const lufs = Number((/I:\s+(-?[\d.]+) LUFS/.exec(eb.split('Summary:')[1] || '') || [])[1]);
-  ok(Number.isFinite(lufs) && Math.abs(lufs - config.lufsEntrega) <= 1, `sonido ${lufs} LUFS (objetivo ${config.lufsEntrega})`, `sonido ${lufs} LUFS, lejos del objetivo ${config.lufsEntrega}`);
+  const { lufs, pico } = leerEbur128(eb);
+  if (!Number.isFinite(lufs)) noComprobado('el volumen (ffmpeg no pudo medir el audio)');
+  else ok(Math.abs(lufs - config.lufsEntrega) <= 1, `sonido ${lufs} LUFS (objetivo ${config.lufsEntrega})`, `sonido ${lufs} LUFS, lejos del objetivo ${config.lufsEntrega}`);
+  const limite = Number(config.picoVerdadero);
+  if (!Number.isFinite(pico)) noComprobado('el pico verdadero (ffmpeg no lo midió)');
+  else ok(pico <= limite + 0.5, `pico ${pico} dBTP (límite ${limite})`, `pico ${pico} dBTP: pasa del límite de ${limite} dBTP (puede saturar al recodificarlo)`);
 
   // Sin pitidos de claqueta ni silencio de más al final.
   const cola = A.pcm(final, Math.max(0, dur - 4), 4);
   const inicio = A.pcm(final, 0, 4);
-  ok(!(cola && A.pitidos(cola, 0).length) && !(inicio && A.pitidos(inicio, 0).length), 'sin pitidos de claqueta al principio ni al final', 'queda un pitido de claqueta en el vídeo');
-  if (cola) {
+  const vacio = (x) => !x || !x.length;
+  if (vacio(cola) || vacio(inicio)) noComprobado('pitidos de claqueta al principio y al final (no se pudo sacar el audio)');
+  else ok(!A.pitidos(cola, 0).length && !A.pitidos(inicio, 0).length, 'sin pitidos de claqueta al principio ni al final', 'queda un pitido de claqueta en el vídeo');
+  if (vacio(cola)) noComprobado('el silencio del final');
+  else {
     const env = A.energia(cola);
     const umbral = Math.max(...env) - 45;
     let ult = env.length - 1;
@@ -517,13 +573,14 @@ function verificar(carpeta) {
   }
 
   // Principio y final: se transcribe y se compara con lo que debía decirse.
-  const partes = EP.agruparPartes(r.originales);
+  const partes = existe(r.originales) ? EP.agruparPartes(r.originales) : [];
   const primera = partes[0];
   const ultima = partes[partes.length - 1];
   const cortado = (p) => { const f = path.join(r.montaje, `parte-${p.id}`, 'multicam-cortado.json'); return existe(f) ? leerJson(f) : null; };
   const pj = (p) => path.join(r.montaje, `transcripcion-parte-${p.id}.json`);
   // El vídeo no debe arrancar con una palabra ya empezada: al principio hay un instante de silencio y luego entra la voz.
-  if (inicio) {
+  if (vacio(inicio)) noComprobado('cómo entra la voz al principio');
+  else {
     const env = A.energia(inicio);
     const suelo = env.length ? Math.min(...env) : -90;
     const umbral = Math.max(suelo + 14, -50);
@@ -535,9 +592,9 @@ function verificar(carpeta) {
   if (r1 && existe(pj(primera))) {
     const esperadas = A.palabras(pj(primera)).filter((w) => w.a >= (Number(r1.origenReferencia) || 0) - 0.1).slice(0, 7).map((w) => w.w);
     const oido = transcribirFragmento(final, 0, 12, config);
-    if (oido === null) aviso('principio no comprobado (no hay Whisper)');
-    else { const c = coincidencia(esperadas, oido); ok(c >= 0.6, `empieza con «${esperadas.slice(0, 5).join(' ')}…» (${Math.round(c * 100)} % de coincidencia)`, `el principio no coincide con lo esperado «${esperadas.join(' ')}» (se oye «${oido.slice(0, 60)}»)`); }
-  } else aviso('principio no comprobado (falta transcripción o receta cortada)');
+    if (oido.sinComprobar) noComprobado(`el principio (${oido.sinComprobar})`);
+    else { const c = coincidencia(esperadas, oido.texto); ok(c >= 0.6, `empieza con «${esperadas.slice(0, 5).join(' ')}…» (${Math.round(c * 100)} % de coincidencia)`, `el principio no coincide con lo esperado «${esperadas.join(' ')}» (se oye «${oido.texto.slice(0, 60)}»)`); }
+  } else aviso('principio no comprobado por texto (falta transcripción o receta cortada)');
   const cfgUlt = EP.configDeParte(config, ultima && ultima.id);
   const rU = ultima && cortado(ultima);
   if (rU && existe(pj(ultima)) && !(cfgUlt.insertar || []).length && !(cfgUlt.alFinal || []).length) {
@@ -547,14 +604,14 @@ function verificar(carpeta) {
     const fin = (Number(rSin.origenReferencia) || 0) + CUT.duracionFrames(rSin) / Number(rSin.project.fps);
     const esperadas = A.palabras(pj(ultima)).filter((w) => w.b <= fin + 0.1).slice(-6).map((w) => w.w);
     const oido = transcribirFragmento(final, Math.max(0, dur - 10), 10, config);
-    if (oido === null) aviso('final no comprobado (no hay Whisper)');
-    else { const c = coincidencia(esperadas, oido); ok(c >= 0.5, `termina con «…${esperadas.slice(-4).join(' ')}» (${Math.round(c * 100)} % de coincidencia)`, `el final no coincide con lo esperado «${esperadas.join(' ')}» (se oye «${oido.slice(-60)}»)`); }
-  } else aviso('final no comprobado (tramos insertados o sin transcripción)');
-  return { lineas, fallos };
+    if (oido.sinComprobar) noComprobado(`el final (${oido.sinComprobar})`);
+    else { const c = coincidencia(esperadas, oido.texto); ok(c >= 0.5, `termina con «…${esperadas.slice(-4).join(' ')}» (${Math.round(c * 100)} % de coincidencia)`, `el final no coincide con lo esperado «${esperadas.join(' ')}» (se oye «${oido.texto.slice(-60)}»)`); }
+  } else aviso('final no comprobado por texto (tramos insertados o sin transcripción)');
+  return { lineas, fallos, sinComprobar };
 }
 
 module.exports = {
   tiemposDeLaUltimaVez,
   marcarFase, estado, huellaDeParte, llamadaDe, resolverLimites, resolverCortesTexto, sueloDeRuido, confirmarSilencios,
-  analizar, aprobar, verificar, coincidencia, tiempoASeg, marcasEnVivo, guiasDeMarcas, textoEntre, CORTE_EN_VIVO_MINIMO,
+  analizar, aprobar, verificar, leerEbur128, coincidencia, tiempoASeg, marcasEnVivo, guiasDeMarcas, textoEntre, CORTE_EN_VIVO_MINIMO,
 };
