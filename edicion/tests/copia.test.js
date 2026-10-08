@@ -62,7 +62,7 @@ test('juntar copia (WAV): el audio seguido y la cabecera con el tamaño del tota
   assert.deepStrictEqual(fs.readFileSync(salida), Buffer.concat([wavHeader(48000, 1, 3840), ...pcm]));
 });
 
-test('juntar-copia (orden): deja el resultado en su sitio y guarda el de antes', () => {
+test('juntar-copia (orden): deja el resultado en su sitio y guarda el de antes aparte, en .respaldos', () => {
   const d = dir();
   const servidor = path.join(d, 'jc_camara.mp4');
   fs.writeFileSync(servidor, junto(0, 3));
@@ -71,7 +71,39 @@ test('juntar-copia (orden): deja el resultado en su sitio y guarda el de antes',
   const r = spawnSync(process.execPath, [CLI, 'juntar-copia', servidor, copia], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);
   assert.deepStrictEqual(fs.readFileSync(servidor), junto(0, 5));
-  assert.deepStrictEqual(fs.readFileSync(path.join(d, 'jc_camara.sin-resto.mp4')), junto(0, 3));
+  assert.deepStrictEqual(fs.readFileSync(path.join(d, '.respaldos', 'jc_camara.sin-resto.mp4')), junto(0, 3));
+  // Una segunda copia no pisa el primer respaldo (el original del servidor).
+  const otra = path.join(d, `s_JC_camara.resto-${junto(0, 5).length}.mp4`);
+  fs.writeFileSync(otra, Buffer.concat([CABECERA, fragmento(5)]));
+  assert.strictEqual(spawnSync(process.execPath, [CLI, 'juntar-copia', servidor, otra], { encoding: 'utf8' }).status, 0);
+  assert.deepStrictEqual(fs.readFileSync(path.join(d, '.respaldos', 'jc_camara.sin-resto.mp4')), junto(0, 3));
+  assert.deepStrictEqual(fs.readFileSync(path.join(d, '.respaldos', 'jc_camara.sin-resto-2.mp4')), junto(0, 5));
+});
+
+test('juntar una copia dentro de originales/ no añade una persona ni repite su audio al montar', () => {
+  const originales = dir();
+  const sesion = path.join(originales, '2026-10-10_21-30-05');
+  fs.mkdirSync(sesion);
+  for (const n of ['jc_camara.mp4', 'jc_audio.wav', 'dj_camara.mp4', 'dj_audio.wav', 'jc_llamada.mp4']) fs.writeFileSync(path.join(sesion, n), junto(0, 3));
+  const resto = path.join(sesion, `JC_camara.resto-${junto(0, 3).length}.mp4`);
+  fs.writeFileSync(resto, Buffer.concat([CABECERA, TROZOS[3]]));
+  const wav = path.join(sesion, 'jc_audio.wav');
+  fs.writeFileSync(wav, Buffer.concat([wavHeader(48000, 1, 1920), Buffer.alloc(1920, 1)]));
+  const restoWav = path.join(sesion, 'JC_audio.resto-1920.wav');
+  fs.writeFileSync(restoWav, Buffer.concat([wavHeader(48000, 1, 960), Buffer.alloc(960, 2)]));
+  for (const [a, b] of [[path.join(sesion, 'jc_camara.mp4'), resto], [wav, restoWav]]) {
+    const r = spawnSync(process.execPath, [CLI, 'juntar-copia', a, b], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  }
+  const partes = EP.agruparPartes(originales);
+  assert.strictEqual(partes.length, 1);
+  const roles = MC.inferRoles(partes[0].archivos);
+  assert.deepStrictEqual([...roles.people.keys()].sort(), ['dj', 'jc']);
+  assert.deepStrictEqual(roles.unknown, []);
+  // Aunque alguien deje un respaldo a mano junto a los demás, tampoco cuenta.
+  const suelto = MC.inferRoles(['/o/jc_camara.mp4', '/o/jc_camara.sin-resto.mp4', '/o/jc_audio.sin-resto-2.wav']);
+  assert.deepStrictEqual([...suelto.people.keys()], ['jc']);
+  assert.strictEqual(suelto.respaldos.length, 2);
 });
 
 test('la cabecera de un WebM acaba donde empieza el primer Cluster', () => {

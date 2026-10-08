@@ -124,6 +124,22 @@ function saveSession(s) {
   fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({ ...s, dir: undefined }, null, 2));
 }
 
+/*
+ * Apunta hasta dónde llegó una pista. Se escribe aparte y se cambia de nombre: así el archivo de progreso
+ * está siempre entero (uno a medio escribir no se podría leer al reanudar tras un corte de luz).
+ */
+async function guardarProgreso(file, datos) {
+  const tmp = `${file}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(datos));
+  for (let i = 0; ; i++) {
+    try { return await fs.promises.rename(tmp, file); } catch (err) {
+      // En Windows, el antivirus o el indexador pueden tener el archivo abierto un instante.
+      if (i >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+      await new Promise((r) => setTimeout(r, 25 * (i + 1)));
+    }
+  }
+}
+
 function loadSession(room, id) {
   const key = `${room}/${id}`;
   if (sessions.has(key)) return sessions.get(key);
@@ -432,20 +448,28 @@ async function handle(req, res) {
     // este cuerpo pudo llegar y guardarse el mismo trozo por otro envío (dos pestañas, un reintento),
     // y añadirlo otra vez lo duplicaría y desplazaría todo lo que viene detrás.
     // Un fallo al escribir no bloquea la pista: el siguiente envío vuelve a intentarlo.
+    // El trozo solo se confirma cuando está en el archivo Y apuntado en el progreso: confirmado sin apuntar,
+    // tras un reinicio se quitaría del archivo (ver «pista-recortada») y la página ya lo habría borrado.
     const turno = (t.writing || Promise.resolve()).catch(() => {}).then(async () => {
       const ahora = chunkDecision(t.nextSeq, seq);
       if (ahora !== 'append') return ahora;
+      const antes = cabecera(t) + t.bytes;
+      const progreso = { nextSeq: t.nextSeq + 1, bytes: t.bytes + body.length };
       try {
+        // Si un fallo anterior dejó algo de más y no se pudo quitar, se quita ahora (si no, quedaría repetido).
+        if ((await fs.promises.stat(t.file)).size > antes) await fs.promises.truncate(t.file, antes);
         await fs.promises.appendFile(t.file, body);
+        // El WAV vale en todo momento, aunque la página muera antes de cerrarlo.
+        if (t.ext === 'wav') fixWavHeader(t.file);
+        await guardarProgreso(t.progressFile, progreso);
       } catch (err) {
         // Lo que se llegara a escribir de este trozo se quita: el reintento lo manda entero.
-        await fs.promises.truncate(t.file, cabecera(t) + t.bytes).catch(() => {});
+        await fs.promises.truncate(t.file, antes).catch(() => {});
+        if (t.ext === 'wav') { try { fixWavHeader(t.file); } catch { /* lo arregla el siguiente trozo */ } }
+        slog('trozo-no-guardado', { archivo: path.basename(t.file), seq, error: err.code || err.message });
         throw err;
       }
-      t.nextSeq++; t.bytes += body.length;
-      // El WAV vale en todo momento, aunque la página muera antes de cerrarlo.
-      if (t.ext === 'wav') fixWavHeader(t.file);
-      await fs.promises.writeFile(t.progressFile, JSON.stringify({ nextSeq: t.nextSeq, bytes: t.bytes }));
+      t.nextSeq = progreso.nextSeq; t.bytes = progreso.bytes;
       return 'append';
     });
     t.writing = turno;

@@ -41,6 +41,20 @@ test('config: los cortes de un episodio no pasan al siguiente (aprobar escribe e
   assert.deepStrictEqual(EP.configDeParte(c.config, '1').cortes, [], 'el episodio nuevo no hereda el corte');
 });
 
+test('config de una parte: lo suyo manda, los objetos se mezclan campo a campo y los cortes se suman', () => {
+  const config = { ...EP.CONFIG_POR_DEFECTO, cortes: [[1, 2]], partes: { 2: { minShot: 5, lufsMicros: -20, silencios: { min: 6 }, cortes: [[3, 4]] } } };
+  const p2 = EP.configDeParte(config, '2');
+  assert.strictEqual(p2.minShot, 5);
+  assert.strictEqual(p2.lufsMicros, -20);
+  assert.strictEqual(p2.silencios.min, 6);
+  assert.strictEqual(p2.silencios.dejar, EP.CONFIG_POR_DEFECTO.silencios.dejar, 'el resto de los silencios sigue');
+  assert.strictEqual(p2.silencios.activo, true);
+  assert.deepStrictEqual(p2.cortes, [[1, 2], [3, 4]]);
+  const p1 = EP.configDeParte(config, '1');
+  assert.strictEqual(p1.minShot, EP.CONFIG_POR_DEFECTO.minShot);
+  assert.strictEqual(p1.silencios.min, EP.CONFIG_POR_DEFECTO.silencios.min);
+});
+
 test('config: por capas; lo del equipo viene de la raíz, lo del episodio de su carpeta, y los objetos se mezclan campo a campo', () => {
   const raiz = tmp();
   const ep = path.join(raiz, '2026-10-10');
@@ -291,7 +305,57 @@ test('limpiezas: varias ventanas en una pasada, y fuera de ellas el audio queda 
   for (const t of [0.2, 2.8, 5.3]) assert.ok(Math.abs(rms(salida, t) - rms(wav, t)) < 0.5, `fuera (${t} s) queda igual`);
 });
 
+test('limpiezas: el WAV limpio se rehace si cambia el micro original o el modelo, no solo los tramos', () => {
+  const dir = tmp();
+  const wav = path.join(dir, 'jc_audio.wav');
+  const modelo = path.join(dir, 'sh.rnnn');
+  escribir(wav, 'audio');
+  escribir(modelo, 'modelo 1');
+  const ventanas = [{ desde: 1, hasta: 2 }];
+  const f = EP.firmaDeLimpieza(wav, ventanas, { rnnoise: modelo });
+  assert.strictEqual(EP.firmaDeLimpieza(wav, [{ desde: 1, hasta: 2 }], { rnnoise: modelo }), f, 'igual si nada cambia');
+  assert.notStrictEqual(EP.firmaDeLimpieza(wav, [{ desde: 1, hasta: 3 }], { rnnoise: modelo }), f, 'otros tramos');
+  assert.notStrictEqual(EP.firmaDeLimpieza(wav, [{ desde: 1, hasta: 2, ia: false }], { rnnoise: modelo }), f, 'sin IA');
+  fs.appendFileSync(wav, ' y el resto de la copia de rescate');
+  const f2 = EP.firmaDeLimpieza(wav, ventanas, { rnnoise: modelo });
+  assert.notStrictEqual(f2, f, 'el original creció (juntar-copia)');
+  escribir(modelo, 'otro modelo distinto');
+  assert.notStrictEqual(EP.firmaDeLimpieza(wav, ventanas, { rnnoise: modelo }), f2, 'otro modelo de RNNoise');
+  // Solo con la puerta (sin IA), el modelo no cuenta.
+  const g = EP.firmaDeLimpieza(wav, [{ desde: 1, hasta: 2, ia: false }], { rnnoise: modelo });
+  escribir(modelo, 'y otro más');
+  assert.strictEqual(EP.firmaDeLimpieza(wav, [{ desde: 1, hasta: 2, ia: false }], { rnnoise: modelo }), g);
+});
+
 // ------------------------------------------------------------------ silencios, color, acabado, whisper
+
+test('color: eq delante (en YUV), una sola ida y vuelta a RGB, con la matriz del vídeo en las dos conversiones', { skip: !hayFfmpeg }, () => {
+  const f = EP.filtrosVideo(EP.CONFIG_POR_DEFECTO);
+  assert.match(f[0], /^eq=/);
+  assert.ok(f.some((x) => x.startsWith('curves=')) && f.some((x) => x.startsWith('vibrance=')));
+  assert.deepStrictEqual(f.filter((x) => x.startsWith('scale=')), ['scale=in_color_matrix=bt709:in_range=tv,format=rgb24', 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p']);
+  assert.match(EP.filtrosVideo(EP.CONFIG_POR_DEFECTO, { matriz: 'bt601' }).join(','), /in_color_matrix=bt601.*out_color_matrix=bt601/);
+  assert.deepStrictEqual(EP.filtrosVideo({ color: { activo: false } }), []);
+  // El mismo vídeo con y sin la etiqueta BT.709 (melt la pone) sale igual: antes, con etiqueta, ffmpeg pasaba a RGB
+  // con BT.709 y volvía con BT.601, y los colores se desplazaban.
+  const dir = tmp();
+  const hacer = (nombre, etiqueta) => {
+    const archivo = path.join(dir, nombre);
+    assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=128x72:r=10:d=0.5', '-pix_fmt', 'yuv420p',
+      ...etiqueta, '-c:v', 'libx264', '-qp', '0', archivo]).status, 0);
+    return archivo;
+  };
+  const md5 = (archivo) => {
+    const r = spawnSync('ffmpeg', ['-v', 'error', '-i', archivo, '-vf', `${f.join(',')},format=yuv420p`, '-f', 'md5', '-'], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  const con = hacer('con.mp4', ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709']);
+  const sin = hacer('sin.mp4', []);
+  assert.strictEqual(md5(con), md5(sin));
+  assert.deepStrictEqual(EP.colorDelVideo(con).matriz, 'bt709');
+  assert.ok(EP.colorDelVideo(con).etiquetas.includes('bt709'));
+});
 
 /* WAV de 16 kHz: [segundos, amplitud de ruido rosa] por tramo (0 = silencio con un poco de ruido de fondo). */
 function wavPorTramos(f, tramos) {
@@ -361,6 +425,77 @@ test('acabado: si NVENC no puede (sin tarjeta), repite con x264 y el vídeo sale
   const tieneNvenc = /h264_nvenc/.test(spawnSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout || '');
   if (!tieneNvenc || a.codificador === 'x264') assert.strictEqual(a.codificador, 'x264');
   assert.ok(fs.statSync(final).size > 1000);
+});
+
+/* Clics (2 ms) en cada segundo entero desde el 1, decodificados como un reproductor: dónde caen, en ms. */
+function clicsEn(archivo) {
+  const r = spawnSync('ffmpeg', ['-v', 'error', '-i', archivo, '-vn', '-ac', '1', '-ar', '48000', '-f', 'f32le', '-'], { maxBuffer: 1 << 28 });
+  const x = new Float32Array(r.stdout.buffer, r.stdout.byteOffset, r.stdout.length / 4);
+  const max = x.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  const out = [];
+  for (let i = 0; i < x.length; i += 1) if (Math.abs(x[i]) > max * 0.3) { out.push(i / 48); i += 24000; }
+  return out;
+}
+
+test('acabado: apto para Spotify (sin listas de edición, imagen en 0), BT.709 etiquetado y el sonido exacto con la imagen', { skip: !hayFfmpeg }, () => {
+  const dir = tmp();
+  // Como el render de melt: MP4 con AAC (con su lista de edición) y etiquetado BT.709.
+  const bruto = path.join(dir, 'bruto.mp4');
+  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=30000/1001:d=5', '-f', 'lavfi', '-i',
+    "aevalsrc='if(lt(mod(t,1),0.002)*gt(t,0.5),0.5*sin(2*PI*2000*t),0.0005*sin(2*PI*300*t))':s=48000:d=5",
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
+    '-c:a', 'aac', '-b:a', '192k', bruto]).status, 0);
+  assert.strictEqual(EP.tieneListasDeEdicion(bruto), true, 'el MP4 normal de ffmpeg sí las lleva');
+  const final = path.join(dir, 'final.mp4');
+  const log = console.log;
+  console.log = () => {};
+  let a;
+  try { a = EP.acabado(bruto, final, { ...EP.CONFIG_POR_DEFECTO }); } finally { console.log = log; }
+  assert.ok(!a.error, a.error);
+  assert.strictEqual(EP.tieneListasDeEdicion(final), false);
+  const info = JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,start_time,color_space,color_primaries,color_transfer',
+    '-of', 'json', final], { encoding: 'utf8' }).stdout).streams;
+  const video = info.find((x) => x.codec_type === 'video');
+  assert.ok(Math.abs(Number(video.start_time)) <= 0.05, `la imagen empieza en ${video.start_time}`);
+  assert.deepStrictEqual([video.color_space, video.color_primaries, video.color_transfer], ['bt709', 'bt709', 'bt709']);
+  // El silencio inicial del AAC ya no se lo salta el reproductor: se compensa, y los clics siguen en su sitio.
+  const antes = clicsEn(bruto);
+  const despues = clicsEn(final);
+  assert.strictEqual(despues.length, antes.length);
+  for (let i = 0; i < antes.length; i += 1) assert.ok(Math.abs(despues[i] - antes[i]) < 1, `clic ${i + 1}: ${antes[i]} → ${despues[i]} ms`);
+});
+
+test('podcast en audio: MP3 con el mismo volumen que el vídeo, título y capítulos (sin recodificar al etiquetar)', { skip: !hayFfmpeg }, () => {
+  const dir = tmp();
+  const bruto = path.join(dir, 'bruto.mp4');
+  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=25:d=30', '-f', 'lavfi', '-i',
+    'anoisesrc=r=48000:d=30:a=0.1:c=pink', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', bruto]).status, 0);
+  const config = { ...EP.CONFIG_POR_DEFECTO, podcast: { ...EP.CONFIG_POR_DEFECTO.podcast, kbps: 128 } };
+  const mp3 = path.join(dir, 'entrega', '2026-10-10.mp3');
+  const r = EP.audioPodcast(bruto, mp3, config);
+  assert.ok(!r.error, r.error);
+  const medir = (f) => {
+    const t = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', f, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-'], { encoding: 'utf8' }).stderr;
+    return AU.leerEbur128(t);
+  };
+  const m = medir(mp3);
+  assert.ok(Math.abs(m.lufs - config.lufsEntrega) <= 1, `${m.lufs} LUFS`);
+  assert.ok(m.pico <= config.picoVerdadero + 0.5, `pico ${m.pico}`);
+  const tam = fs.statSync(mp3).size;
+  const e = EP.etiquetarPodcast(mp3, config, {
+    titulo: 'Episodio 2: Japón = sushi; #viajes', duracion: 30,
+    capitulos: [{ t: 0, titulo: 'Intro' }, { t: 12.5, titulo: 'Japón; y más' }],
+  });
+  assert.ok(!e.error, e.error);
+  assert.strictEqual(e.capitulos, 2);
+  const info = JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_chapters', '-show_entries', 'format=duration:format_tags=title,artist:stream=sample_rate,bit_rate',
+    '-of', 'json', mp3], { encoding: 'utf8' }).stdout);
+  assert.strictEqual(info.format.tags.title, 'Episodio 2: Japón = sushi; #viajes');
+  assert.strictEqual(info.format.tags.artist, 'Dos Tipos Promedio');
+  assert.deepStrictEqual(info.chapters.map((c) => [Number(c.start_time), Number(c.end_time), c.tags.title]), [[0, 12.5, 'Intro'], [12.5, 30, 'Japón; y más']]);
+  assert.strictEqual(info.streams[0].sample_rate, '44100');
+  assert.ok(Math.abs(Number(info.format.duration) - 30) < 0.2, info.format.duration);
+  assert.ok(Math.abs(fs.statSync(mp3).size - tam) < 4096, 'solo cambian las etiquetas, el audio es el mismo');
 });
 
 test('whisper: los argumentos de más de la configuración se añaden', () => {

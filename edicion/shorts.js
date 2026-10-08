@@ -156,9 +156,10 @@ function aAss(cues, { ancho = 1080, alto = 1920, familia = 'Arial' } = {}) {
 }
 
 /*
- * Hace un short: la receta vertical con melt y, encima, los subtítulos y el volumen para el móvil
- * (−14 LUFS) con ffmpeg. h: { final, media (byId), desde, hasta, palabras, dir, salida, melt (comando),
- * compositing, docVersion }. Devuelve { segundos, subtitulos } o { error }.
+ * Hace un short: la receta vertical con melt y, encima, el color y el sonido del episodio, los subtítulos y el
+ * volumen para el móvil (−14 LUFS) con ffmpeg. h: { final, media (byId), desde, hasta, palabras, dir, salida,
+ * melt (comando), compositing, docVersion, filtrosVideo, filtrosAudio, etiquetasColor }. Devuelve
+ * { segundos, subtitulos } o { error }.
  */
 function hacerShort(h) {
   fs.mkdirSync(h.dir, { recursive: true });
@@ -185,10 +186,12 @@ function hacerShort(h) {
   const fuente = fuenteGruesa();
   if (fuente) fs.copyFileSync(fuente.archivo, path.join(h.dir, path.basename(fuente.archivo)));
   fs.writeFileSync(path.join(h.dir, 'short.ass'), aAss(cues, { familia: fuente ? fuente.familia : 'Arial' }), 'utf8');
-  const filtros = cues.length ? ['-vf', 'subtitles=short.ass:fontsdir=.'] : [];
-  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', vertical, ...filtros, '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11',
-    '-c:v', 'libx264', '-crf', '19', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-    '-movflags', '+faststart', path.resolve(h.salida)], { cwd: h.dir, encoding: 'utf8', timeout: 60 * 60000 });
+  // El color y el sonido del episodio (h.filtrosVideo, h.filtrosAudio: los del acabado), y los subtítulos encima.
+  const vf = [...(h.filtrosVideo || []), ...(cues.length ? ['subtitles=short.ass:fontsdir=.'] : [])];
+  const af = [...(h.filtrosAudio || []), 'loudnorm=I=-14:TP=-1.5:LRA=11'].join(',');
+  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', vertical, ...(vf.length ? ['-vf', vf.join(',')] : []), '-af', af,
+    '-c:v', 'libx264', '-crf', '19', '-preset', 'medium', '-pix_fmt', 'yuv420p', ...(h.etiquetasColor || []),
+    '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart', path.resolve(h.salida)], { cwd: h.dir, encoding: 'utf8', timeout: 60 * 60000 });
   if (res.status !== 0) return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
   return { segundos: Math.round((h.hasta - h.desde) * 10) / 10, subtitulos: cues.length };
 }

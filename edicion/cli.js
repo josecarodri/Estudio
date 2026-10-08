@@ -810,7 +810,7 @@ function cmdMulticam(args) {
   }
 
   // --- 1. quién es quién
-  const { people, call, calls, unknown, restos } = MC.inferRoles(archivos);
+  const { people, call, calls, unknown, restos, respaldos } = MC.inferRoles(archivos);
   const carpeta = path.resolve(String(args.flags.out || path.dirname(archivos[0])));
   console.log('material reconocido:');
   for (const [id, p] of people) {
@@ -832,6 +832,7 @@ function cmdMulticam(args) {
     console.log(`  aviso   ${MC.nombreBase(f)} es una copia de rescate (lo que no llegó al servidor): no se usa así.`
       + ' Júntala antes con su archivo: node cli.js juntar-copia <archivo> <copia>');
   }
+  for (const f of respaldos) console.log(`  aviso   ${MC.nombreBase(f)} es el respaldo de antes de juntar una copia: no se usa.`);
 
   const personas = [...people.values()].filter((p) => p.cam);
   if (personas.length < 1) {
@@ -883,9 +884,11 @@ function cmdMulticam(args) {
   console.log('\nanalizando el audio...');
   const envs = {};
   for (const f of unicos) {
+    const t = cronometro();
     const e = SY.envelope(f, { analyzeSeconds: analizar });
     if (e.error) throw new Error(`no se pudo analizar ${MC.nombreBase(f)}: ${e.error}`);
     envs[f] = e;
+    console.log(`  ${MC.nombreBase(f).padEnd(22)} ${t()}`);
   }
 
   /*
@@ -1019,11 +1022,12 @@ function cmdMulticam(args) {
     const fuente = p.mic || p.cam;
     return { id: p.id, envelope: envs[fuente].envelope, offsetBins: Math.round(offsets[fuente] * binHz) };
   });
+  const minShot = args.flags['min-shot'] !== undefined ? Number(args.flags['min-shot']) : 2;
   const turns = MC.detectTurns(pistas, {
     binHz,
     fromBin,
     toBin,
-    minShot: args.flags['min-shot'] !== undefined ? Number(args.flags['min-shot']) : 2,
+    minShot,
     confirm: args.flags.confirm !== undefined ? Number(args.flags.confirm) : 0.5,
   });
 
@@ -1037,7 +1041,7 @@ function cmdMulticam(args) {
     reparto[t.id] = (reparto[t.id] || 0) + (t.endBin - t.startBin) / binHz;
   }
   console.log(`\n${turns.length} planos · duración media ` +
-    `${(((toBin - fromBin) / binHz) / turns.length).toFixed(1)}s`);
+    `${(((toBin - fromBin) / binHz) / turns.length).toFixed(1)}s (mínima ${minShot}s)`);
   for (const [id, seg] of Object.entries(reparto)) {
     const pct = (100 * seg) / ((toBin - fromBin) / binHz);
     console.log(`  ${id}: ${seg.toFixed(1)}s en pantalla (${pct.toFixed(0)}%)`);
@@ -1052,6 +1056,7 @@ function cmdMulticam(args) {
     const objetivo = args.flags.lufs !== undefined ? Number(args.flags.lufs) : AN.OBJETIVO_LUFS;
     console.log(`\nnivel de los micrófonos (objetivo ${objetivo} LUFS):`);
     for (const fuente of voces) {
+      const t = cronometro();
       const v = AN.volumen(fuente);
       if (v.error) {
         console.log(`  ${MC.nombreBase(fuente).padEnd(22)} no se pudo medir (${v.error})`);
@@ -1060,7 +1065,7 @@ function cmdMulticam(args) {
       const g = AN.gananciaHacia(v.lufs, objetivo);
       if (g.db !== 0) ganancias[fuente] = g.db;
       console.log(`  ${MC.nombreBase(fuente).padEnd(22)} ${v.lufs.toFixed(1)} LUFS` +
-        ` -> ${g.db >= 0 ? '+' : ''}${g.db} dB${g.recortada ? '  (acotada; estaba muy lejos del objetivo)' : ''}`);
+        ` -> ${g.db >= 0 ? '+' : ''}${g.db} dB${g.recortada ? '  (acotada; estaba muy lejos del objetivo)' : ''} · ${t()}`);
     }
   }
 
@@ -1072,6 +1077,7 @@ function cmdMulticam(args) {
 
   if (modoColor !== 'off') {
     const medidos = {};
+    const tColor = cronometro();
     for (const persona of personas) {
       // Para el color medio basta una muestra: 5 minutos, saltando el primero si la grabación es larga.
       // Decodificar la cámara entera (90 min, a veces a 60 fps) solo para esto costaba muchos minutos.
@@ -1081,7 +1087,7 @@ function cmdMulticam(args) {
     }
     const lista = Object.values(medidos);
     if (lista.length) {
-      console.log('\ncolor medio de cada cámara:');
+      console.log(`\ncolor medio de cada cámara (medido en ${tColor()}):`);
       // Objetivo común: el punto medio entre todas. Así ninguna se lleva todo el
       // ajuste y las dos se mueven la mitad del camino.
       // Cada persona cuenta una vez, aunque tenga varios tramos de cámara (jc y jc-2).
@@ -1206,6 +1212,18 @@ function proyectoEditado(r) {
   return fs.readFileSync(huellaProyectoFile(r), 'utf8').trim() !== huellaArchivo(proyecto);
 }
 
+/*
+ * Cuánto tarda cada paso del análisis, en la consola: para saber en el PC dónde se va el tiempo antes de
+ * optimizar nada. cronometro() devuelve una función que da lo transcurrido («12 s», «2 min 5 s»).
+ */
+function cronometro() {
+  const t0 = Date.now();
+  return () => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  };
+}
+
 /* De qué archivos sale la configuración, y sus avisos (p. ej. cortes de otro episodio en la raíz). */
 function mostrarConfig({ archivos, avisos }) {
   console.log(archivos.length ? `configuración: ${archivos.join(' + ')}` : 'configuración: valores por defecto (no hay episodio.json)');
@@ -1219,12 +1237,14 @@ function mostrarConfig({ archivos, avisos }) {
 function mostrarPartes(partes) {
   console.log(`partes encontradas: ${partes.length}`);
   for (const p of partes) {
-    const { people, llamadas, unknown } = MC.inferRoles(p.archivos);
+    const { people, llamadas, unknown, restos, respaldos } = MC.inferRoles(p.archivos);
     const quien = [...people.keys()].join(', ') || 'nadie';
     const llamada = !llamadas.length ? 'SIN llamada'
       : llamadas.length === 1 ? 'llamada' : `llamada en ${llamadas.length} tramos (${llamadas.map((l) => l.quien).join(' + ')})`;
     console.log(`  parte ${p.id}${p.sesion ? ` · sesión ${p.sesion}` : ''}: ${p.archivos.length} archivos · ${quien} · ${llamada}`);
     for (const f of unknown) console.log(`    aviso   se quedaría fuera: ${MC.nombreBase(f)}`);
+    for (const f of restos) console.log(`    aviso   copia de rescate sin juntar (no se usa): ${MC.nombreBase(f)} → node cli.js juntar-copia <archivo> <copia>`);
+    for (const f of respaldos) console.log(`    aviso   respaldo de juntar-copia, no se usa: ${MC.nombreBase(f)}`);
   }
   if (partes.length > 1 && partes.some((p) => p.porNumero)) {
     console.log('  aviso   el orden de las partes sale del "(1)", "(2)" que pone el navegador al descargar:');
@@ -1348,8 +1368,9 @@ function cmdEpisodio(args) {
       ...args.flags,
       out: carpetaParte,
       name: `${path.basename(r.base)} parte ${parte.id}`,
-      'min-shot': config.minShot,
-      lufs: config.lufsMicros,
+      // Lo de la parte, si lo tiene (p. ej. otra duración mínima de plano o nivel de micros en una sesión concreta).
+      'min-shot': cfg.minShot,
+      lufs: cfg.lufsMicros,
     };
     delete flags.render;
     if (llamada) flags.ref = llamada;
@@ -1382,12 +1403,12 @@ function cmdEpisodio(args) {
     for (const [id, ventanas] of limpiezas) {
       const media = receta.media.find((m) => m.id === id);
       // El nombre lleva la parte (con una carpeta por sesión, dos partes tienen el mismo jc_audio.wav)
-      // y una firma de las ventanas: si cambian, se rehace; si no, se reutiliza.
-      const firma = require('node:crypto').createHash('sha1').update(JSON.stringify({ origen: media.path, ventanas })).digest('hex').slice(0, 8);
+      // y una firma del original, las ventanas y el modelo: si algo cambia, se rehace; si no, se reutiliza.
+      const firma = EP.firmaDeLimpieza(media.path, ventanas, cfg);
       const limpio = path.join(r.montaje, 'audio', `parte-${parte.id}-${path.basename(media.path, path.extname(media.path))}.limpio-${firma}.wav`);
       if (!exists(limpio)) {
         console.log(`\nlimpiando el micro ${id.slice(4)}: ${ventanas.map((v) => `${segundosAReloj(v.desde)}-${segundosAReloj(v.hasta)}`).join(', ')} (reloj del micro) ...`);
-        const l = EP.limpiarMicro(media.path, limpio, ventanas, config);
+        const l = EP.limpiarMicro(media.path, limpio, ventanas, cfg);
         if (l.error) {
           console.error(`error en la limpieza: ${l.error}`);
           return 1;
@@ -1420,12 +1441,12 @@ function cmdEpisodio(args) {
     // Antes de sacar los tramos que se copian (alFinal, insertar), para que tampoco salga en ellos.
     let vetos = {};
     let cubiertos = [];
-    const cc = { ...CAM.POR_DEFECTO, ...(config.camaras || {}) };
+    const cc = { ...CAM.POR_DEFECTO, ...(cfg.camaras || {}) };
     if (cc.activo !== false && !args.flags['sin-camaras']) {
       const pc = CAM.problemasDeCamaras(receta, { cache: path.join(r.montaje, 'camaras.json'), opciones: cc, log: (t) => console.log(`  ${t}`) });
       for (const e of pc.errores) console.log(`  aviso   no se pudo revisar la imagen de ${e}`);
       if (pc.problemas.length) {
-        const c = CUT.cubrirCamaras(receta, pc.problemas, { fotogramas, minimo: (config.disimularCortes || {}).minimo });
+        const c = CUT.cubrirCamaras(receta, pc.problemas, { fotogramas, minimo: (cfg.disimularCortes || {}).minimo });
         receta = c.receta;
         vetos = c.vetos;
         cubiertos = c.cubiertos;
@@ -1448,17 +1469,17 @@ function cmdEpisodio(args) {
       t.motivo = x.texto ? `texto ${x.texto}` : (x.nota || 'corte a mano');
       return t;
     });
-    if (config.silencios && config.silencios.activo && !args.flags['sin-silencios'] && llamada) {
+    if (cfg.silencios && cfg.silencios.activo && !args.flags['sin-silencios'] && llamada) {
       console.log('\nbuscando silencios largos...');
-      const s = CUT.detectarSilencios(llamada, config.silencios);
+      const s = CUT.detectarSilencios(llamada, cfg.silencios);
       if (s.error) {
         console.log(`  aviso   no se pudieron buscar silencios: ${s.error}`);
       } else {
         const fin = origen + CUT.duracionFrames(receta) / fps;
         const dentro = s.tramos.filter((t) => t.hasta > origen && t.desde < fin);
         // La llamada puede callar mientras alguien habla (si se cortó): se comprueba en los micros.
-        const conf = config.silencios.confirmarEnMicros === false ? { quedan: dentro, descartados: [] } : AU.confirmarSilencios(receta, dentro);
-        console.log(`  ${conf.quedan.length} silencio(s) de ${config.silencios.min}s o más; se dejan ${config.silencios.dejar}s de pausa`);
+        const conf = cfg.silencios.confirmarEnMicros === false ? { quedan: dentro, descartados: [] } : AU.confirmarSilencios(receta, dentro);
+        console.log(`  ${conf.quedan.length} silencio(s) de ${cfg.silencios.min}s o más; se dejan ${cfg.silencios.dejar}s de pausa`);
         for (const d of conf.descartados) {
           console.log(`    no se corta ${segundosAReloj(d.desde)} → ${segundosAReloj(d.hasta)}: la llamada calla, pero en el micro de ${d.micro} hay ${d.segundos.toFixed(1)} s de voz (¿se cortó la llamada?)`);
         }
@@ -1496,7 +1517,7 @@ function cmdEpisodio(args) {
 
     // Saltos de imagen: si a los dos lados de un corte (o de la unión con la parte anterior) se ve a la
     // misma persona, se pone un momento la cámara del otro. Se hace en la receta sin cortar, en sincronía.
-    const dc = config.disimularCortes || {};
+    const dc = cfg.disimularCortes || {};
     const fijos = (cfg.mantenerPlano || []).map((t) => [
       tiempoASegundos(t[0], `mantenerPlano de la parte ${parte.id}`), tiempoASegundos(t[1], `mantenerPlano de la parte ${parte.id}`)]);
     if (dc.activo !== false && (tramos.length || personaAntes)) {
@@ -1511,7 +1532,7 @@ function cmdEpisodio(args) {
     const cortesF = CUT.unirTramos(tramos.map((t) => ({ desde: Math.round((t.desde - origen) * fps), hasta: Math.round((t.hasta - origen) * fps) })));
     const seCorta = (a, b) => cortesF.some((x) => x.desde <= a && b <= x.hasta);
     // Plano doble en los intercambios rápidos: los dos a la vez, cada uno en su mitad (ver cortes.planoDoble).
-    const pd = config.planoDoble || {};
+    const pd = cfg.planoDoble || {};
     if (pd.activo !== false) {
       const d = CUT.planoDoble(receta, { ...pd, fijos, fotogramas, vetos });
       if (d.dobles.length) {
@@ -1626,6 +1647,20 @@ function cmdEpisodio(args) {
   const p = M.hasFfprobe() ? M.probe(final, null) : null;
   console.log(`\nlisto para YouTube: ${final}${a.codificador ? ` (vídeo con ${a.codificador})` : ''}`);
   if (p) console.log(`  ${p.width}x${p.height} · ${p.seconds.toFixed(1)} s · ${(fs.statSync(final).size / 1048576).toFixed(0)} MB`);
+  // El episodio en audio para las plataformas de podcast: desde el bruto, con la misma medida de volumen (segundos).
+  const pc = config.podcast || {};
+  if (pc.activo !== false) {
+    AU.marcarFase(r, 'audio-podcast', 'el episodio en MP3');
+    const mp3 = path.join(r.entrega, `${nombre}.mp3`);
+    const au = EP.audioPodcast(bruto, mp3, config, a.medida);
+    if (au.error) console.log(`  aviso   no se pudo hacer el audio del podcast: ${au.error}`);
+    else {
+      // Título ya; los capítulos, si los hay, se los pone lo de YouTube (justo abajo).
+      const e = EP.etiquetarPodcast(mp3, config, { titulo: config.titulo || nombre, duracion: p && p.seconds });
+      if (e.error) console.log(`  aviso   no se pudo poner el título al MP3: ${e.error}`);
+      console.log(`listo para Spotify y demás plataformas de podcast (audio): ${mp3} (${(fs.statSync(mp3).size / 1048576).toFixed(0)} MB)`);
+    }
+  }
   // Subtítulos, capítulos y descripción, si ya están las transcripciones (las hace `analizar`). No con el proyecto
   // retocado a mano: sus tiempos ya no son los de la receta, de la que sale el mapa del montaje.
   if (usarProyecto) {
@@ -1643,9 +1678,10 @@ function cmdEpisodio(args) {
     AU.marcarFase(r, 'verificando');
     const v = AU.verificar(r.base);
     console.log(`\nverificación:\n  ${v.lineas.join('\n  ')}`);
-    AU.marcarFase(r, v.fallos ? 'listo-con-avisos' : 'listo', v.fallos ? `${v.fallos} comprobación(es) fallida(s)` : 'verificado');
+    const sin = v.sinComprobar ? ` (${v.sinComprobar} sin comprobar)` : '';
+    AU.marcarFase(r, v.fallos ? 'listo-con-avisos' : 'listo', v.fallos ? `${v.fallos} comprobación(es) fallida(s)${sin}` : `verificado${sin}`);
     AV.ponerResumen(`listo para YouTube: ${path.basename(final)}${p ? ` · ${(p.seconds / 60).toFixed(1)} min` : ''} · `
-      + `${v.fallos ? `${v.fallos} comprobación(es) con aviso: mira «estado»` : 'verificación ✔'}`);
+      + `${v.fallos ? `${v.fallos} comprobación(es) con aviso: mira «estado»` : `verificación ✔${sin}`}`);
     return v.fallos ? 3 : 0;
   }
   AU.marcarFase(r, 'listo');
@@ -1773,6 +1809,7 @@ function cmdVerificar(args) {
   if (!carpeta) { console.error('uso: node cli.js verificar <carpeta-del-episodio>'); return 2; }
   const v = AU.verificar(carpeta);
   console.log(v.lineas.join('\n'));
+  console.log(`\n${v.fallos ? `✘ ${v.fallos} comprobación(es) fallida(s)` : '✔ todo lo comprobado está bien'}${v.sinComprobar ? ` · ${v.sinComprobar} sin comprobar` : ''}`);
   return v.fallos ? 3 : 0;
 }
 
@@ -1961,6 +1998,13 @@ function paqueteYoutube(r, config, { transcribirSiFalta }) {
   const yt = config.youtube || {};
   const texto = YT.descripcion({ resumen: config.resumen, capitulos: cap.capitulos, pie: yt.pie });
   fs.writeFileSync(path.join(r.entrega, `${nombre}.descripcion.txt`), `${texto}\n`, 'utf8');
+  // Los mismos capítulos y título en el MP3 del podcast, si está (sin volver a codificarlo).
+  const mp3 = path.join(r.entrega, `${nombre}.mp3`);
+  if (exists(mp3)) {
+    const dur = CUT.duracionFrames(texto0.final) / Number(texto0.final.project.fps);
+    const e = EP.etiquetarPodcast(mp3, config, { titulo: config.titulo || nombre, capitulos: cap.capitulos, duracion: dur });
+    if (e.error) console.log(`  aviso   no se pudieron poner los capítulos al MP3: ${e.error}`);
+  }
   const faltan = [
     !config.titulo && 'el título («titulo» en el episodio.json del episodio)',
     !config.resumen && 'el resumen («resumen»)',
@@ -1975,6 +2019,10 @@ function paqueteYoutube(r, config, { transcribirSiFalta }) {
     '## Archivos',
     `- Vídeo: \`entrega/${nombre}.mp4\``,
     `- Subtítulos: \`entrega/${nombre}.srt\` (YouTube Studio → Subtítulos → Añadir idioma: español → Subir archivo → «Con tiempos»)`,
+    '',
+    '## Spotify',
+    `- En vídeo: el mismo \`entrega/${nombre}.mp4\` (cumple lo que pide Spotify: sin listas de edición, BT.709). En audio: \`entrega/${nombre}.mp3\`, con título y capítulos.`,
+    '- La descripción sirve tal cual: Spotify también saca los capítulos de los tiempos del texto.',
     '',
     ...(faltan.length || cap.avisos.length ? ['## Pendiente', ...faltan.map((f) => `- Falta ${f}`), ...cap.avisos.map((a) => `- ${a}`), ''] : []),
   ].join('\n'), 'utf8');
@@ -2032,6 +2080,8 @@ function cmdShorts(args) {
     const res = SH.hacerShort({
       final, media: byId, desde: x.desde, hasta: x.hasta, palabras, dir: path.join(r.montaje, 'shorts'), salida,
       melt: M.comandoMelt(melt), compositing, docVersion,
+      // Con el mismo color y sonido que el episodio (antes salían sin color y sin el compresor).
+      filtrosVideo: EP.filtrosVideo(config), filtrosAudio: EP.filtrosAudio(config), etiquetasColor: EP.COLOR_HD.etiquetas, // los verticales de melt son HD
     });
     if (res.error) { console.error(`  error: ${res.error}`); continue; }
     const inicio = palabras.filter((p) => p.ini >= x.desde && p.ini < x.hasta).slice(0, 14).map((p) => p.w).join(' ');
@@ -2088,8 +2138,9 @@ liberados ${gb(b.bytes)}`);
 
 /*
  * Junta una copia de rescate del Estudio («…_camara.resto-123456.mp4», lo que no llegó al servidor) con su
- * archivo (el que sí llegó). Por omisión deja el resultado en lugar del archivo y guarda el de antes con
- * «.sin-resto» delante de la extensión. Ver episodio.juntarCopia.
+ * archivo (el que sí llegó). Por omisión deja el resultado en lugar del archivo y guarda el de antes en la
+ * carpeta «.respaldos» de al lado, con «.sin-resto» delante de la extensión: junto a los demás, dentro de
+ * originales/, el montaje lo tomaría por la cámara de otra persona. Ver episodio.juntarCopia.
  */
 function cmdJuntarCopia(args) {
   const [principal, resto] = args._;
@@ -2104,7 +2155,11 @@ function cmdJuntarCopia(args) {
   if (r.error) { fs.rmSync(tmp, { force: true }); console.error(`error: ${r.error}`); return 1; }
   if (!args.flags.out) {
     const ext = path.extname(principal);
-    const copia = `${principal.slice(0, -ext.length)}.sin-resto${ext}`;
+    const respaldos = path.join(path.dirname(path.resolve(principal)), '.respaldos');
+    fs.mkdirSync(respaldos, { recursive: true });
+    // Si ya se juntó otra copia antes, el primer respaldo (el original del servidor) no se pisa.
+    let copia = path.join(respaldos, `${path.basename(principal, ext)}.sin-resto${ext}`);
+    for (let n = 2; exists(copia); n += 1) copia = path.join(respaldos, `${path.basename(principal, ext)}.sin-resto-${n}${ext}`);
     fs.renameSync(principal, copia);
     console.log(`el archivo de antes queda en ${copia}`);
   }

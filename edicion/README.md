@@ -294,14 +294,14 @@ de un vistazo en la timeline por qué está cortado ahí.
 | `node cli.js config <carpeta> [--tomar-de-raiz]` | configuración efectiva del episodio y de qué archivo sale cada ajuste |
 | `node cli.js analizar <carpeta>` | propuesta: inicio/fin de voz, silencios y marcas de charla técnica (no propone contenido) |
 | `node cli.js aprobar <carpeta> 1.1 2.1` | pasa propuestas al `episodio.json` del episodio, con los cortes ajustados al silencio |
-| `node cli.js verificar <carpeta>` | comprueba el vídeo final: duración, −14 LUFS, sin pitidos, principio y final |
+| `node cli.js verificar <carpeta>` | comprueba el vídeo final: duración, −14 LUFS y pico, sin pitidos, apto para Spotify, el MP3, principio y final (✔, ✘ o «? sin comprobar») |
 | `node cli.js estado <carpeta>` | en qué fase va el proceso, en una línea, y lo que tardó cada fase la última vez |
 | `node cli.js transcribir <carpeta>` | transcripción local con Whisper (texto con tiempos por parte) |
 | `node cli.js revision <carpeta> [--silencios]` | vídeo corto (480p) para revisar el montaje desde el móvil: cada empalme numerado, principio y final |
 | `node cli.js youtube <carpeta>` | subtítulos `.srt`, transcripción e índice del vídeo final, y la descripción con capítulos (`entrega/youtube.md`) |
 | `node cli.js shorts <carpeta> [--antes 40] [--despues 8]` | shorts verticales con subtítulos, de los ★ marcados al grabar (o de `shorts`), en `entrega/shorts/` |
 | `node cli.js limpiar <carpeta> [--estudio] [--confirmar]` | libera disco con el episodio hecho (sin `--confirmar` solo enseña qué borraría) |
-| `node cli.js juntar-copia <archivo> <copia.resto-N.ext>` | junta una copia de rescate del Estudio (lo que no llegó al servidor) con su archivo, exacta |
+| `node cli.js juntar-copia <archivo> <copia.resto-N.ext>` | junta una copia de rescate del Estudio (lo que no llegó al servidor) con su archivo, exacta; el de antes queda en `.respaldos/` |
 
 Opciones: `--out <archivo>`, `--doc-version 1.1|1.04`,
 `--compositing qtblend|frei0r.cairoblend|composite`, `--root <carpeta>`,
@@ -433,6 +433,11 @@ pasadas (pico −1 dBTP), color de acabado, H.264 crf 18 con el índice al princ
 con 3 min del episodio y el color puesto: x264 238 s, nvenc 79 s (≈2 h frente a ≈40 min por episodio), mismo tamaño y
 misma calidad (SSIM 0,989); el resto del tiempo de nvenc es el filtro de color. El color de acabado y la limpieza de
 sonido no están en el `.kdenlive`: en Kdenlive se ve el montaje, no el aspecto final.
+El color va con eq delante (en YUV) y una sola ida y vuelta a RGB con la matriz del vídeo (BT.709) en las dos
+conversiones: un 45 % menos de tiempo en el filtro y sin el desplazamiento de color que dejaba volver con BT.601. La
+salida va etiquetada BT.709 y **sin listas de edición**, como pide Spotify a los vídeos de podcast (el silencio inicial
+del AAC se compensa: el sonido sigue exacto con la imagen). Además deja `entrega/<fecha>.mp3`, el episodio en audio
+para Spotify, Apple Podcasts o iVoox (44,1 kHz, `podcast.kbps`, mismo sonido y volumen, con título y capítulos).
 
 **PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision`, `render`, `youtube` y `shorts` impiden que
 el PC se duerma mientras trabajan (en Windows, con un PowerShell aparte que se cierra solo al acabar) y, si tardaron

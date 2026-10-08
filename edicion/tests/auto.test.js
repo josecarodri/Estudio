@@ -321,3 +321,44 @@ test('marcas en vivo: guías en el proyecto (★ en verde, ✂ sin cortar en roj
   ]);
   assert.strictEqual(g.sinCortar, 1);
 });
+
+// ------------------------------------------------------------------ verificar
+/* Un episodio con solo el vídeo final (6 s), hecho con ffmpeg: `audio` es la fuente de lavfi o null (sin audio). */
+function episodioConFinal(audio) {
+  const EP = require('../episodio.js');
+  const ep = path.join(tmp(), '2026-10-10');
+  EP.crearEstructura(ep);
+  const args = ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=25:d=6'];
+  if (audio) args.push('-f', 'lavfi', '-i', audio, '-c:a', 'aac', '-shortest');
+  args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', path.join(ep, 'entrega', '2026-10-10.mp4'));
+  assert.strictEqual(spawnSync('ffmpeg', args).status, 0);
+  return ep;
+}
+
+test('verificar: si no se puede sacar el audio, lo dice «sin comprobar»; no da «sin pitidos» por bueno', { skip: !hayFfmpeg }, () => {
+  const v = AU.verificar(episodioConFinal(null));
+  const texto = v.lineas.join('\n');
+  assert.match(texto, /✘ el vídeo no tiene audio/);
+  assert.doesNotMatch(texto, /✔ sin pitidos/);
+  assert.match(texto, /\? sin comprobar: pitidos de claqueta/);
+  assert.match(texto, /\? sin comprobar: el volumen/);
+  assert.ok(v.sinComprobar >= 3, texto);
+  assert.ok(v.fallos >= 1, texto);
+});
+
+test('verificar: comprueba el pico verdadero contra el límite configurado', { skip: !hayFfmpeg }, () => {
+  // Un tono a 0 dBFS: pasa del límite de −1 dBTP.
+  const alto = AU.verificar(episodioConFinal('sine=f=300:r=48000:d=6,volume=7.9'));
+  assert.match(alto.lineas.join('\n'), /✘ pico -?[\d.]+ dBTP: pasa del límite de -1 dBTP/);
+  // El mismo tono 12 dB más bajo: bien.
+  const bajo = AU.verificar(episodioConFinal('sine=f=300:r=48000:d=6,volume=2'));
+  assert.match(bajo.lineas.join('\n'), /✔ pico -[\d.]+ dBTP \(límite -1\)/);
+  assert.match(bajo.lineas.join('\n'), /✔ sin pitidos/);
+});
+
+test('leerEbur128: integrado y pico verdadero del resumen; NaN si falta', () => {
+  const r = AU.leerEbur128('...Summary:\n\n  Integrated loudness:\n    I:         -14.1 LUFS\n\n  True peak:\n    Peak:       -1.3 dBFS\n');
+  assert.deepStrictEqual(r, { lufs: -14.1, pico: -1.3 });
+  const nada = AU.leerEbur128('error');
+  assert.ok(Number.isNaN(nada.lufs) && Number.isNaN(nada.pico));
+});

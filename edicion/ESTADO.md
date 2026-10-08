@@ -1,6 +1,6 @@
 # Estado de la edición del podcast (edicion/)
 
-Última sesión: 2026-10-06 (comprobación en el PC: avisos arreglados, nvenc medido; ver «Comprobación en el PC»).
+Última sesión: 2026-10-08 (segunda revisión externa y entrega para Spotify; ver «Segunda revisión externa»).
 
 ## Hecho
 - Generación de proyectos `.kdenlive` (documento 1.1, Kdenlive 26.8 detectado) y render con `melt`. El primer episodio se revisó abriéndolo en Kdenlive.
@@ -237,6 +237,50 @@ Otra IA revisó `main` (561cbcb) y encontró cuatro fallos; los cuatro se reprod
   a 0,9890). Jose vio las dos versiones y se ven bien las dos: **`"codificador": "nvenc"` puesto en el `episodio.json`
   del equipo** (copia de antes: `episodio.json.copia-20261006-nvenc`). Ahorra ≈1 h 20 min por episodio.
 
+## Segunda revisión externa (2026-10-08)
+Codex revisó `main` (9803577) y señaló seis fallos. Los seis se reprodujeron y se arreglaron, cada uno con una prueba que
+falla con el código de antes:
+- **Servidor: trozo confirmado sin apuntar** (`server.js`, subida). Si se guardaba el trozo pero fallaba escribir el
+  progreso (`.…seq`), el reintento recibía «repetido» y la página lo daba por subido; tras reiniciar el servidor, ese
+  trozo se quitaba del archivo. Ahora solo se confirma cuando están el trozo y el progreso; si falla lo segundo, se
+  quita el trozo y el reintento lo guarda de verdad. El progreso se escribe aparte y se renombra (nunca a medias), con
+  reintentos si Windows lo tiene abierto un instante; y si algo quedó de más en el archivo, se quita antes de añadir.
+- **`juntar-copia` dentro de `originales/`**: el de antes quedaba como `jc_camara.sin-resto.mp4` y el montaje lo tomaba
+  por otra persona («jc-sin-resto»), con su audio repetido. Ahora va a `.respaldos/` junto al archivo (una segunda copia
+  no pisa la primera: `…sin-resto-2…`) y, aunque alguien lo deje suelto, `analizarNombre` lo reconoce y no lo usa.
+- **`verificar` daba ✔ sin comprobar**: si no se podía sacar el audio, salía «✔ sin pitidos». Ahora cada línea es ✔, ✘ o
+  «? sin comprobar» (cuenta aparte: `sinComprobar`); y se comprueba el pico verdadero contra `picoVerdadero` (con 0,5 dB
+  de margen por el AAC; un acabado real da −1,2).
+- **Audio limpio desactualizado**: la firma del WAV limpio solo miraba la ruta y los tramos. Ahora incluye tamaño y fecha
+  del micro original (p. ej. tras juntarle una copia), los filtros y el modelo de RNNoise; y se escribe aparte y se
+  renombra (uno a medias ya no se reutiliza).
+- **Ajustes por parte ignorados**: `partes.N.minShot` y `lufsMicros` cambiaban la huella pero el motor recibía los
+  generales. Ahora todo lo de dentro de la parte (también `silencios`, `camaras`, `disimularCortes`, `planoDoble`) sale
+  de su configuración, mezclada campo a campo (`partes.2.silencios.min` ya no borra el resto de `silencios`).
+- **Plano mínimo incumplido** (`detectTurns`): el corte se colocaba hacia atrás, donde empezó a hablar el otro, y una
+  frase de 1 s dejaba un plano de 1 s con mínimo de 2. Ahora el corte va donde empezó a hablar salvo si así el plano no
+  llega al mínimo; entonces, al cumplirlo. La huella del reparto sube a v2 (se rehace el análisis una vez).
+
+Además, buscando calidad y tiempo:
+- **Color del acabado** (medido aquí en 1080p con ffmpeg 6.1): ffmpeg convertía YUV→RGB→YUV→RGB→YUV por fotograma
+  (curves y vibrance en RGB, eq en YUV en medio). Con eq delante, 2 conversiones: el filtro tarda un 45 % menos
+  (6,9 → 3,8 s en la prueba) y la imagen sale igual (PSNR 59,8 dB; un LUT 3D se probó y era más lento). En el PC, donde
+  el color era 67 de los 79 s de la prueba de nvenc, debería bajar el acabado de ≈40 a ≈25 min (sin medir allí).
+- **Matriz de color**: el render de melt va etiquetado BT.709; ffmpeg pasaba a RGB con BT.709 y volvía con BT.601 (la de
+  por defecto), y el vídeo salía sin etiqueta: colores un poco desplazados (piel algo más cálida, rojos más intensos).
+  Ahora las dos conversiones dicen su matriz y la salida va etiquetada BT.709. Medido: el mismo vídeo con y sin etiqueta
+  da el mismo resultado. **Puede verse un poco distinto de los primeros episodios** (más fiel a la cámara).
+- **Spotify** (sus especificaciones de vídeo: sin listas de edición, primera imagen a ≤ 50 ms, BT.709): el MP4 de
+  ffmpeg llevaba listas de edición. Ahora va sin ellas (`-use_editlist 0` y tiempos negativos en los B); el silencio
+  inicial del AAC (1024 muestras) se compensa recortando lo mismo del principio. Medido con clics: el sonido cae exacto
+  con la imagen (< 1 ms), igual que antes. `verificar` lo comprueba.
+- **Audio del podcast**: `entrega/<fecha>.mp3` (44,1 kHz, 192 kbps, mismo sonido y volumen que el vídeo, desde el bruto)
+  con título, autor y los capítulos de YouTube (CHAP de ID3, sin recodificar). Config del equipo: `podcast`.
+- **Shorts** con el color y el compresor del episodio (antes salían sin color).
+- **Tiempos por paso** en el análisis del montaje (audio de cada archivo, nivel de cada micro, color): para saber en el PC
+  dónde se van los ~25 min antes de optimizar nada. El audio no es: aquí, 30 min de WAV se analizan en ~3 s + 4,5 s.
+- `melt` instalado en el entorno de pruebas: las 4 pruebas de render ya corren también aquí (303 pruebas, 0 fallos).
+
 ## Pendiente
 1. Primer caso real de caída: revisar en Kdenlive el empalme jc → jc-2 y la llamada unida (`llamada-unida.json`).
 2. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
@@ -249,3 +293,7 @@ Otra IA revisó `main` (561cbcb) y encontró cuatro fallos; los cuatro se reprod
    revisión cómo quedan el plano doble y los rótulos; mirar `estado` tras el render (tiempos por fase) para decidir si
    subir `render.hilos`; comprobar que no salen avisos ⚠ de cámara en material bueno.
 6. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy, por el centro).
+7. En el próximo episodio (cambios del 2026-10-08): que Jose mire el **color** en la revisión (ahora con la matriz bien,
+   puede verse algo menos cálido que antes; si no le gusta, se ajusta `color`), anotar el tiempo del acabado en
+   `estado` (debería bajar con el color reordenado) y los tiempos por paso del análisis, y subir a Spotify el `.mp4`
+   (o el `.mp3` si publican solo audio) para confirmar que lo acepta sin avisos.

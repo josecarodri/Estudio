@@ -45,6 +45,9 @@ function analizarNombre(file) {
   // «…_camara.resto-123456»: copia de rescate del Estudio con lo que no llegó al servidor. No es otra cámara:
   // hay que juntarla antes con su archivo (cli.js juntar-copia).
   if (/\.resto-\d+$/.test(base)) return { rol: 'resto', quien: null };
+  // «jc_camara.sin-resto»: el archivo de antes de juntarle una copia (lo guarda juntar-copia). Ya está dentro del
+  // archivo juntado: usarlo sería repetir esa cámara como si fuera de otra persona («jc-sin-resto»).
+  if (/\.sin-resto(-\d+)?$/.test(base)) return { rol: 'respaldo', quien: null };
   // Se quitan la fecha de la sesión que pone el Estudio al descargar y los sufijos que añaden
   // los navegadores: "(1)", "-2".
   const limpio = base.replace(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_/, '')
@@ -74,11 +77,16 @@ function inferRoles(files) {
   const unknown = [];
   const llamadas = [];
   const restos = [];
+  const respaldos = [];
 
   for (const file of files) {
     const { rol, quien } = analizarNombre(file);
     if (rol === 'resto') {
       restos.push(file);
+      continue;
+    }
+    if (rol === 'respaldo') {
+      respaldos.push(file);
       continue;
     }
     if (rol === 'call') {
@@ -96,7 +104,7 @@ function inferRoles(files) {
   }
 
   llamadas.sort((a, b) => a.base.localeCompare(b.base) || a.tramo - b.tramo);
-  return { people, call: llamadas.length ? llamadas[0].file : null, calls: llamadas.map((l) => l.file), llamadas, unknown, restos };
+  return { people, call: llamadas.length ? llamadas[0].file : null, calls: llamadas.map((l) => l.file), llamadas, unknown, restos, respaldos };
 }
 
 /* Convierte una envolvente lineal a dB, con suelo para no tener -Infinity. */
@@ -249,9 +257,13 @@ function detectTurns(pistas, options) {
     const sostenido = bin - candidatoDesde >= confirmarBins;
     const planoSuficiente = bin - inicio >= minShotBins;
     if (sostenido && planoSuficiente) {
-      turnos.push({ startBin: inicio, endBin: candidatoDesde, id: actual });
+      // El corte va donde empezó a hablar (se confirma después, pero se coloca hacia atrás), salvo si así el
+      // plano que se deja no llegaría al mínimo: entonces, justo al cumplirlo. Si no, una frase de 1 s del otro
+      // dejaba un plano de 1 s aunque el mínimo fuera 2.
+      const corte = Math.max(candidatoDesde, inicio + minShotBins);
+      turnos.push({ startBin: inicio, endBin: corte, id: actual });
       actual = ganador;
-      inicio = candidatoDesde;
+      inicio = corte;
       candidato = null;
     }
   }

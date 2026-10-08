@@ -223,7 +223,8 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
   el minuto 12:30 ya está en el servidor…». Se llama `…_camara.resto-<bytes>.mp4` y el editor la junta exacta con lo del
   servidor (`node cli.js juntar-copia`). Si todo está ya en el servidor, lo dice y no da un archivo vacío.
 - Si el servidor se reinicia, las pistas continúan donde se quedaron (si se cayó justo entre guardar un trozo y
-  apuntarlo, ese trozo no queda duplicado). Con `npm run internet` el enlace cambia: lo que el invitado tenga pendiente
+  apuntarlo, ese trozo no queda duplicado). Un trozo solo se confirma a la página cuando está guardado **y** apuntado:
+  si falla apuntarlo (disco lleno, antivirus), se quita y el reintento lo guarda, así la página no lo borra antes de tiempo. Con `npm run internet` el enlace cambia: lo que el invitado tenga pendiente
   solo se puede rescatar desde su página vieja con **Descargar copia** (ver Tailscale, más arriba). Si tras el reinicio
   el servidor ya no tiene la grabación en marcha, **■ Detener** la para igualmente en esa página.
 - Los WAV valen en todo momento (su cabecera se actualiza con cada trozo), aunque la página muera antes de cerrarlos,

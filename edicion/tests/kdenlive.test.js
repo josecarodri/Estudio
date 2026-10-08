@@ -548,6 +548,27 @@ test('detectTurns respeta la duración mínima de plano', () => {
   assert.equal(turnos[0].id, 'dj');
 });
 
+test('detectTurns: ningún plano queda por debajo del mínimo, aunque el otro solo diga una frase corta', () => {
+  // dj habla, jc dice algo de 1 s y dj sigue. El corte a jc se coloca donde empezó a hablar; el de vuelta a dj no
+  // puede ir 1 s después (un plano de 1 s con un mínimo de 2): va al cumplirse el mínimo.
+  const binHz = 100;
+  const bins = 30 * binHz;
+  const hace = (tramos) => {
+    const env = new Float64Array(bins).fill(0.001);
+    for (const [a, b] of tramos) for (let i = Math.round(a * binHz); i < Math.round(b * binHz); i += 1) env[i] = 0.4;
+    return env;
+  };
+  for (const minShot of [2, 3]) {
+    const turnos = MC.detectTurns([
+      { id: 'dj', envelope: hace([[0, 5], [6.01, 30]]), offsetBins: 0 },
+      { id: 'jc', envelope: hace([[5, 6.01]]), offsetBins: 0 },
+    ], { binHz, fromBin: 0, toBin: bins, minShot, confirm: 0.5 });
+    assert.deepEqual(turnos.map((t) => t.id), ['dj', 'jc', 'dj']);
+    assert.ok(Math.abs(turnos[1].startBin / binHz - 5) < 0.1, 'el corte a jc, donde empieza a hablar');
+    for (const t of turnos.slice(0, -1)) assert.ok(t.endBin - t.startBin >= minShot * binHz, `plano de ${t.id} de ${(t.endBin - t.startBin) / binHz} s (mínimo ${minShot})`);
+  }
+});
+
 test('detectTurns funciona cuando uno habla casi todo el rato', () => {
   // Un monólogo: el invitado habla el 95% del tiempo. Si el suelo de ruido se
   // estimara solo con un percentil bajo, caería dentro de su propia voz y no se
@@ -1755,7 +1776,8 @@ test('episodio monta una sesión con caída del anfitrión hasta el proyecto (si
     // Marcas puestas en vivo (un ✂ que no se aprueba y un ★) y un corte a mano en mitad de un turno de dj.
     sesionConMarcas(originales, [{ tipo: 'corte', inicio: 10, fin: 18, nombre: 'JC' }, { tipo: 'bueno', hora: 50, nombre: 'DJ' }]);
     fs.writeFileSync(path.join(ep, 'episodio.json'), JSON.stringify({
-      partes: { 1: { cortes: [[42, 45, 'prueba']] } },
+      // Ajustes propios de la parte: tienen que llegar al motor (antes se usaban los generales).
+      partes: { 1: { cortes: [[42, 45, 'prueba']], lufsMicros: -20, minShot: 2.2 } },
       titulo: 'Episodio de prueba',
       resumen: 'Hablamos de Japón.',
       capitulos: [{ titulo: 'Intro' }, { titulo: 'Japón', frase: 'hablemos ahora de japon' }, { titulo: 'Despedida', frase: 'y para terminar' }],
@@ -1766,6 +1788,8 @@ test('episodio monta una sesión con caída del anfitrión hasta el proyecto (si
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(res.stdout, /partes encontradas: 1/);
     assert.match(res.stdout, /llamada en 2 tramos/);
+    assert.match(res.stdout, /objetivo -20 LUFS/);
+    assert.match(res.stdout, /\(mínima 2\.2s\)/);
     assert.ok(fs.existsSync(path.join(ep, 'montaje', 'parte-1', 'llamada-unida.wav')));
     assert.ok(fs.existsSync(path.join(ep, 'montaje', 'episodio.kdenlive')));
     const receta = JSON.parse(fs.readFileSync(path.join(ep, 'montaje', 'episodio.json'), 'utf8'));
