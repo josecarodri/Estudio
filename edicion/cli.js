@@ -2081,7 +2081,7 @@ function cmdShorts(args) {
       final, media: byId, desde: x.desde, hasta: x.hasta, palabras, dir: path.join(r.montaje, 'shorts'), salida,
       melt: M.comandoMelt(melt), compositing, docVersion,
       // Con el mismo color y sonido que el episodio (antes salían sin color y sin el compresor).
-      filtrosVideo: EP.filtrosVideo(config), filtrosAudio: EP.filtrosAudio(config), etiquetasColor: EP.COLOR_HD.etiquetas, // los verticales de melt son HD
+      filtrosVideo: EP.filtrosVideo(config), filtrosAudio: EP.filtrosAudio(config), etiquetasColor: EP.COLOR_HD.etiquetas, filtroColor: EP.COLOR_HD.filtro, // los verticales de melt son HD
     });
     if (res.error) { console.error(`  error: ${res.error}`); continue; }
     const inicio = palabras.filter((p) => p.ini >= x.desde && p.ini < x.hasta).slice(0, 14).map((p) => p.w).join(' ');
