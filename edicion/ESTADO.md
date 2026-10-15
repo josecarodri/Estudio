@@ -281,6 +281,15 @@ Además, buscando calidad y tiempo:
   dónde se van los ~25 min antes de optimizar nada. El audio no es: aquí, 30 min de WAV se analizan en ~3 s + 4,5 s.
 - `melt` instalado en el entorno de pruebas: las 4 pruebas de render ya corren también aquí (303 pruebas, 0 fallos).
 
+## Bip al final del episodio del 2026-10-10 (2026-10-14)
+- Síntoma: el vídeo publicado acaba con ~0,24 s del pitido de cierre. Causa: el `episodio.json` del equipo tenía
+  `"hasta": null`, que anulaba el `"auto"` por defecto; la parte 2 no se recortó por el final y acabó en el pitido
+  (la última voz estaba 3,4 s antes). La parte 1 llevaba un `hasta` explícito y no se vio afectada.
+- Arreglado: se quitó `hasta` del `episodio.json` del equipo (copia: `episodio.json.copia-20261014-hasta`);
+  `resolverLimites` avisa con ⚠ si `hasta` es null; `verificar` busca pitidos desde 0,06 s (antes 0,15 s, y este
+  se le escapó). Prueba nueva en `auto.test.js`. El vídeo ya publicado (400+ vistas) no se tocó.
+- `npm run test:edicion`: fallan 2 pruebas de BT.709/color que ya fallaban antes (dependen del ffmpeg de este entorno).
+
 ## Pendiente
 1. Primer caso real de caída: revisar en Kdenlive el empalme jc → jc-2 y la llamada unida (`llamada-unida.json`).
 2. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace

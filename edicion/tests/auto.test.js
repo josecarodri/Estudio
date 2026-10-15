@@ -356,6 +356,13 @@ test('verificar: comprueba el pico verdadero contra el límite configurado', { s
   assert.match(bajo.lineas.join('\n'), /✔ sin pitidos/);
 });
 
+test('verificar: detecta un pitido de cierre cortado (0,2 s) al final del vídeo', { skip: !hayFfmpeg }, () => {
+  const conBip = AU.verificar(episodioConFinal("aevalsrc='if(lt(t,5.8),0.2*sin(2*PI*300*t),0.5*sin(2*PI*1000*t))':s=48000:d=6"));
+  assert.match(conBip.lineas.join('\n'), /✘ queda un pitido de claqueta en el vídeo/);
+  const sinBip = AU.verificar(episodioConFinal('sine=f=300:r=48000:d=6,volume=2'));
+  assert.match(sinBip.lineas.join('\n'), /✔ sin pitidos/);
+});
+
 test('leerEbur128: integrado y pico verdadero del resumen; NaN si falta', () => {
   const r = AU.leerEbur128('...Summary:\n\n  Integrated loudness:\n    I:         -14.1 LUFS\n\n  True peak:\n    Peak:       -1.3 dBFS\n');
   assert.deepStrictEqual(r, { lufs: -14.1, pico: -1.3 });

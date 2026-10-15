@@ -207,6 +207,9 @@ function huellaDeParte(parte, cfg) {
 function resolverLimites(parte, cfg, montaje) {
   const out = { desde: cfg.desde, hasta: cfg.hasta, detalle: [] };
   const auto = (v) => v === 'auto' || v === true;
+  // `hasta: null` (p. ej. en el episodio.json del equipo) anula el «auto» por defecto: el montaje acabaría en el final
+  // del archivo, con el pitido de cierre dentro (pasó el 2026-10-10 con la parte 2).
+  if (cfg.hasta === null) out.detalle.push('⚠ hasta vacío (null): no se recorta el final y el pitido de cierre se oirá. Quita ese ajuste o pon "auto".');
   if (!auto(cfg.desde) && !auto(cfg.hasta)) return out;
   const llamada = llamadaDe(parte, montaje);
   const lim = llamada ? A.limitesDeVoz(llamada) : null;
@@ -561,7 +564,9 @@ function verificar(carpeta) {
   const inicio = A.pcm(final, 0, 4);
   const vacio = (x) => !x || !x.length;
   if (vacio(cola) || vacio(inicio)) noComprobado('pitidos de claqueta al principio y al final (no se pudo sacar el audio)');
-  else ok(!A.pitidos(cola, 0).length && !A.pitidos(inicio, 0).length, 'sin pitidos de claqueta al principio ni al final', 'queda un pitido de claqueta en el vídeo');
+  // En el vídeo ya montado un pitido puede quedar cortado (el 2026-10-10 sobraron ~0,24 s al final y no se oyó como tal
+  // para el detector de 0,15 s): se busca desde 0,06 s.
+  else ok(!A.pitidos(cola, 0, 0.06).length && !A.pitidos(inicio, 0, 0.06).length, 'sin pitidos de claqueta al principio ni al final', 'queda un pitido de claqueta en el vídeo');
   if (vacio(cola)) noComprobado('el silencio del final');
   else {
     const env = A.energia(cola);
