@@ -180,8 +180,13 @@ function offsetBetween(refEnv, otherEnv) {
     }
   }
 
-  // Los índices por encima de n/2 son desfases negativos.
-  const lag = peakIndex > n / 2 ? peakIndex - n : peakIndex;
+  /*
+   * Con el relleno hasta n ≥ a + b, los desfases positivos (0 … a−1) ocupan los primeros índices y
+   * los negativos (−(b−1) … −1) los últimos b−1. No vale cortar por n/2: un tramo que empieza
+   * tarde en una referencia larga (una llamada retomada a los 59 min de una sesión de 72) tiene un
+   * desfase positivo mayor que n/2 y salía negativo, con el tramo puesto antes del anterior.
+   */
+  const lag = peakIndex > n - b.length ? peakIndex - n : peakIndex;
   const rms = Math.sqrt(sumSq / n) || 1;
 
   /*

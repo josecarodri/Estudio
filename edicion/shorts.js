@@ -35,8 +35,9 @@ function recetaVertical(final, desde, hasta, { ancho = 1080, alto = 1920, aspect
     const p = { ...e };
     delete p.pan;
     delete p.tilt;
+    delete p.anchoVisible;
     if (e.track === 2) Object.assign(p, { zoom: llena(e.clip, 0.5), tilt: -alto / 4 });         // plano doble: abajo
-    else if (e.zoom === 0.5) Object.assign(p, { zoom: llena(e.clip, 0.5), tilt: alto / 4 });     // plano doble: arriba
+    else if (e.anchoVisible || e.zoom === 0.5) Object.assign(p, { zoom: llena(e.clip, 0.5), tilt: alto / 4 });     // plano doble: arriba
     else p.zoom = llena(e.clip, 1);
     edit.push(p);
   }

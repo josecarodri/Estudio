@@ -21,7 +21,7 @@ const KEYS = {
   media: ['id', 'path'],
   tracks: ['video', 'audio'],
   edit: ['clip', 'in', 'out', 'duration', 'track', 'at', 'audio', 'video', 'audioTrack',
-    'fadeIn', 'fadeOut', 'dissolve', 'speed', 'zoom', 'pan', 'tilt', 'opacity',
+    'fadeIn', 'fadeOut', 'dissolve', 'speed', 'zoom', 'pan', 'tilt', 'opacity', 'anchoVisible',
     'gain', 'rgb', 'contrast', 'saturation', 'gamma'],
   // transform[] reencuadra un corte por su número (1 = el primero de edit): es lo mismo
   // que poner esas claves en el propio corte, y lo del corte manda.
@@ -272,6 +272,9 @@ function validate(recipe) {
       }
       if (cut.opacity !== undefined && (cut.opacity < 0 || cut.opacity > 100)) {
         err(`${where}.opacity va de 0 a 100`);
+      }
+      if (cut.anchoVisible !== undefined && !(isFiniteNumber(cut.anchoVisible) && cut.anchoVisible > 0 && cut.anchoVisible <= 1)) {
+        err(`${where}.anchoVisible va de más de 0 a 1 (la parte del ancho que se ve, recortada por el centro)`);
       }
     });
   }

@@ -321,6 +321,7 @@ function layout(recipe, media, fps) {
         pan: cut.pan !== undefined ? cut.pan : extra.pan,
         tilt: cut.tilt !== undefined ? cut.tilt : extra.tilt,
         opacity: cut.opacity !== undefined ? cut.opacity : extra.opacity,
+        anchoVisible: cut.anchoVisible,
       },
       audio: cut.audio !== false && clip.hasAudio,
       audioOnly,
@@ -466,12 +467,27 @@ function emitColor(xml, item, indent) {
  */
 function emitTransform(xml, item, size, indent) {
   const t = item.transform;
-  const hasGeometry = t.zoom !== undefined || t.pan !== undefined || t.tilt !== undefined;
+  const hasGeometry = t.zoom !== undefined || t.pan !== undefined || t.tilt !== undefined || t.anchoVisible !== undefined;
   const hasOpacity = t.opacity !== undefined;
   if (!hasGeometry && !hasOpacity) return;
 
   const zoom = t.zoom !== undefined ? Number(t.zoom) : 1;
-  const w = Math.round(size.width * zoom);
+  // anchoVisible < 1: solo esa parte del ancho, recortada por el centro (el plano doble: cada uno a altura
+  // completa en su mitad). El recorte va antes de colocarlo; con use_profile, en píxeles del proyecto.
+  const visible = t.anchoVisible !== undefined ? Number(t.anchoVisible) : 1;
+  if (visible < 1) {
+    const lado = Math.round((size.width * (1 - visible)) / 2);
+    xml.open('filter', { id: `crop${item.cutIndex}` }, indent);
+    xml.prop('left', lado, indent + 1);
+    xml.prop('right', lado, indent + 1);
+    xml.prop('top', 0, indent + 1);
+    xml.prop('bottom', 0, indent + 1);
+    xml.prop('use_profile', 1, indent + 1);
+    xml.prop('mlt_service', 'crop', indent + 1);
+    xml.prop('kdenlive_id', 'crop', indent + 1);
+    xml.close('filter', indent);
+  }
+  const w = Math.round(size.width * zoom * visible);
   const h = Math.round(size.height * zoom);
   const x = Math.round((size.width - w) / 2 + Number(t.pan || 0));
   const y = Math.round((size.height - h) / 2 - Number(t.tilt || 0));

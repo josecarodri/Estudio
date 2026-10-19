@@ -300,6 +300,7 @@ de un vistazo en la timeline por qué está cortado ahí.
 | `node cli.js revision <carpeta> [--silencios]` | vídeo corto (480p) para revisar el montaje desde el móvil: cada empalme numerado, principio y final |
 | `node cli.js youtube <carpeta>` | subtítulos `.srt`, transcripción e índice del vídeo final, y la descripción con capítulos (`entrega/youtube.md`) |
 | `node cli.js shorts <carpeta> [--antes 40] [--despues 8]` | shorts verticales con subtítulos, de los ★ marcados al grabar (o de `shorts`), en `entrega/shorts/` |
+| `node cli.js clips <carpeta>` | clips horizontales de unos minutos, un tema cada uno (de `clips`), en `entrega/clips/` |
 | `node cli.js limpiar <carpeta> [--estudio] [--confirmar]` | libera disco con el episodio hecho (sin `--confirmar` solo enseña qué borraría) |
 | `node cli.js juntar-copia <archivo> <copia.resto-N.ext>` | junta una copia de rescate del Estudio (lo que no llegó al servidor) con su archivo, exacta; el de antes queda en `.respaldos/` |
 
@@ -320,7 +321,7 @@ repo); aquí va cómo funciona por dentro.
 **Configuración en capas.** Los valores por defecto (`CONFIG_POR_DEFECTO` en `episodio.js`), encima
 `<raiz>/episodio.json` con lo del equipo (retardo de audio por persona, niveles, silencios, color, codificador) y
 encima `<raiz>/AAAA-MM-DD/episodio.json` con lo de ese episodio. Las claves de episodio (`cortes`, `partes`,
-`limpiezas`, `mantenerPlano`, `insertar`, `alFinal`, `titulo`, `resumen`, `capitulos`, `shorts`, y `desde`/`hasta` que no sean `auto`) puestas en la raíz no se
+`limpiezas`, `mantenerPlano`, `insertar`, `alFinal`, `titulo`, `resumen`, `capitulos`, `shorts`, `clips`, `enlace`, y `desde`/`hasta` que no sean `auto`) puestas en la raíz no se
 aplican: se avisa, y `config <carpeta> --tomar-de-raiz` las pasa a su episodio. Un `episodio.json` de episodio:
 
 ```jsonc
@@ -328,6 +329,8 @@ aplican: se avisa, y `config <carpeta> --tomar-de-raiz` las pasa a su episodio. 
   "titulo": "…", "resumen": "…",                       // para YouTube (ver más abajo)
   "capitulos": [{ "titulo": "Intro" }, { "titulo": "El viaje", "frase": "bueno, cuéntame del viaje" }],
   "shorts": [{ "desde": "12:30", "hasta": "13:20" }],  // minutos del vídeo final; sin esto, uno por ★
+  "clips": [{ "titulo": "…", "desde": "26:20", "hasta": "una frase" }],  // minutos o frases del vídeo final
+  "enlace": "https://youtu.be/…",                       // el episodio subido (para la descripción de los clips)
   "cortes": [["2:02", "2:34"]],                        // para todas las partes
   "partes": {
     "1": {
@@ -391,9 +394,14 @@ quieto con el ruido de su cámara no (a la calidad del Estudio, 10 Mb/s en 1080p
 
 **Plano doble.** Cuando la conversación va y viene deprisa (`planoDoble.planos`, 3, planos seguidos de menos de
 `corto`, 2,5 s, y al menos `minimo`, 3 s), tanto cambio de cámara marea: en ese tramo se ve a los dos a la vez, cada
-uno en su mitad (zoom 0,5; la izquierda en V1 y la derecha en V2; `izquierda`: `jc`), con una guía azul «◫». Se
+uno en su mitad a altura completa: de cada cámara, la franja central de medio ancho (`anchoVisible: 0.5` en la receta:
+un filtro `crop` con `use_profile` antes del `qtblend`; la izquierda en V1 y la derecha en V2; `izquierda`: `jc`), con
+una guía azul «◫». Hasta el 2026-10-19 iba a media escala, con franjas negras arriba y abajo («nos vemos pequeños»). Se
 hace tras disimular los saltos, en la receta sin cortar, y no usa una cámara congelada ni toca los `mantenerPlano`.
-La revisión enseña los dos primeros. `"planoDoble": { "activo": false }` lo quita.
+Además, **de vez en cuando** aunque no haya intercambio rápido (lo pidió Jose: con los rápidos solos salían 3 en
+88 min): en cada tramo de `cada` s (240) sin plano doble se pone uno de unos `duracion` s (8) donde más planos hay,
+empezando en un cambio de plano; nunca en los primeros `cada` s, en lo que se va a cortar ni a menos de `cada`/2 de
+otro. `"cada": 0` lo quita y deja solo los rápidos. La revisión enseña los dos primeros. `"planoDoble": { "activo": false }` lo quita todo.
 
 **Rótulos con el nombre.** Con `"rotulos": { "nombres": { "jc": "JC", "dj": "DJ" } }` (lo que eligieron ellos, ya por
 defecto; se cambia en la configuración del equipo), la primera vez que se ve a cada uno solo (desde el segundo `desde`, 3, en un plano en que quepa entero)
@@ -419,6 +427,15 @@ alto·(16/9)/ancho = 3,16, medido con melt) y el plano doble con una persona arr
 Encima, con ffmpeg, los subtítulos grabados (ASS: letra gruesa blanca con borde, a dos tercios del alto, encima de
 los botones de YouTube) y el volumen a −14 LUFS. Quedan en `entrega/shorts/` con su lista `shorts.md`.
 
+**Clips.** `clips <carpeta>` hace vídeos horizontales de unos minutos, un tema cada uno (como los de los podcasts
+grandes), con los `clips` del `episodio.json` del episodio: `{ "titulo", "desde", "hasta", "resumen" }`, donde
+`desde` y `hasta` son minutos del vídeo final o frases (`desde` empieza en esa frase; `hasta` acaba justo antes de
+ella, como los cortes por texto); de 1 a 20 min, ajustados a frases. Salen del vídeo final ya acabado (color y
+sonido del episodio): solo se recortan y se vuelven a codificar (el codificador del equipo) con un fundido de 0,3 s
+al entrar y 0,5 s al salir. Cada uno con sus subtítulos `.srt`, una imagen del primer tercio para la miniatura y su
+descripción en `entrega/clips/clips.md`: el resumen, «▶ Episodio completo» con el `enlace` del `episodio.json` del
+episodio (ponerlo cuando el episodio esté subido y repetir `clips`) y el pie del equipo.
+
 **Lo que no se repite.** La huella de cada parte (`parte-N/huella.txt`) evita repetir el análisis de cámaras si no
 cambiaron los archivos ni lo que afecta al reparto; cambiar cortes tarda segundos. `--rehacer` lo fuerza,
 `--recortar` lo evita siempre, `--reanudar` parte del montaje ya unido y salta al render.
@@ -439,7 +456,7 @@ salida va etiquetada BT.709 y **sin listas de edición**, como pide Spotify a lo
 del AAC se compensa: el sonido sigue exacto con la imagen). Además deja `entrega/<fecha>.mp3`, el episodio en audio
 para Spotify, Apple Podcasts o iVoox (44,1 kHz, `podcast.kbps`, mismo sonido y volumen, con título y capítulos).
 
-**PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision`, `render`, `youtube` y `shorts` impiden que
+**PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision`, `render`, `youtube`, `shorts` y `clips` impiden que
 el PC se duerma mientras trabajan (en Windows, con un PowerShell aparte que se cierra solo al acabar) y, si tardaron
 más de `avisos.minimoSegundos` (60), avisan al terminar o al fallar: notificación de Windows y, con
 `"avisos": { "ntfy": "<tema>" }` en la configuración del equipo, también en el móvil con la app gratuita ntfy
@@ -457,7 +474,7 @@ lo borra con `--confirmar`. Nunca toca `originales/`, `entrega/` ni los proyecto
 episodio esté listo (o `--forzar`).
 
 Opciones de `episodio`: `--solo-montaje`, `--reanudar`, `--recortar`, `--rehacer`, `--sin-silencios`,
-`--sin-acabado`, `--sin-verificar`, `--sin-camaras`, `--usar-proyecto`, `--descartar-cambios`; `episodio nuevo [<raiz>] --fecha AAAA-MM-DD`.
+`--sin-acabado`, `--solo-acabado` (repite el acabado con el render en bruto que ya hay), `--sin-verificar`, `--sin-camaras`, `--usar-proyecto`, `--descartar-cambios`; `episodio nuevo [<raiz>] --fecha AAAA-MM-DD`.
 De `importar`: `--copiar`, `--mover`, `--sesiones <id>,<id>`, `--horas <n>` (36), `--estudio <carpeta>`,
 `--descargas [<carpeta>]`.
 

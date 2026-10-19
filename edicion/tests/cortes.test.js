@@ -223,20 +223,41 @@ test('plano doble: en un intercambio rápido se ve a los dos, cada uno en su mit
   const r = C.planoDoble(conversacion(planos), { izquierda: 'jc' });
   assert.deepStrictEqual(r.dobles, [{ desde: 250, hasta: 400, izquierda: 'jc', derecha: 'dj' }]);
   const v1 = r.receta.edit.filter((e) => !e.audioTrack && !e.track).sort((a, b) => a.at - b.at)
-    .map((e) => [e.clip, e.at, e.at + e.duration, e.in - e.at, e.zoom, e.pan]);
+    .map((e) => [e.clip, e.at, e.at + e.duration, e.in - e.at, e.anchoVisible, e.pan]);
   assert.deepStrictEqual(v1, [
     ['cam_dj', 0, 250, 100, undefined, undefined],
     ['cam_jc', 250, 400, 50, 0.5, -480],                     // jc a la izquierda
     ['cam_dj', 400, 1000, 100, undefined, undefined],
   ]);
   const v2 = r.receta.edit.filter((e) => e.track === 2);
-  assert.deepStrictEqual(v2.map((e) => [e.clip, e.at, e.duration, e.in - e.at, e.zoom, e.pan]), [['cam_dj', 250, 150, 100, 0.5, 480]]);
+  assert.deepStrictEqual(v2.map((e) => [e.clip, e.at, e.duration, e.in - e.at, e.anchoVisible, e.pan]), [['cam_dj', 250, 150, 100, 0.5, 480]]);
   assert.strictEqual(r.receta.tracks.video, 2);
   // Sin decir quién va a la izquierda, por orden alfabético; y al cortar, las dos mitades se cortan igual.
   assert.deepStrictEqual(C.planoDoble(conversacion(planos)).dobles[0].izquierda, 'dj');
   const cortada = C.aplicarCortes(r.receta, [{ desde: 300 / 25, hasta: 340 / 25 }]);
-  assert.deepStrictEqual(cortada.edit.filter((e) => e.zoom === 0.5).map((e) => [e.clip, e.track || 1, e.at, e.duration]).sort(),
+  assert.deepStrictEqual(cortada.edit.filter((e) => e.anchoVisible === 0.5).map((e) => [e.clip, e.track || 1, e.at, e.duration]).sort(),
     [['cam_dj', 2, 250, 50], ['cam_dj', 2, 300, 60], ['cam_jc', 1, 250, 50], ['cam_jc', 1, 300, 60]]);
+});
+
+test('plano doble de vez en cuando: uno por tramo de `cada` s, donde más va y viene, nunca en lo que se corta', () => {
+  // Planos de 6 s, con un rato de más ida y vuelta (4 de 2,6 s: no llegan a «intercambio rápido») en 1600-1860.
+  const planos = [];
+  let at = 0;
+  const poner = (dur) => { planos.push([planos.length % 2 ? 'cam_jc' : 'cam_dj', at, at + dur]); at += dur; };
+  for (let i = 0; i < 10; i += 1) poner(150);
+  poner(100);
+  for (let i = 0; i < 4; i += 1) poner(65);
+  for (const d of [150, 150, 150, 90]) poner(d);
+  const conv = conversacion(planos);
+  assert.deepStrictEqual(C.planoDoble(conv, { izquierda: 'jc' }).dobles, [], 'sin `cada`, solo los rápidos');
+  // Cada 40 s (1000 frames), de 8 s: nada en los primeros 40 s; en el siguiente tramo, el rato de más cambios.
+  const r = C.planoDoble(conv, { izquierda: 'jc', cada: 40, duracion: 8 });
+  assert.deepStrictEqual(r.dobles, [{ desde: 1600, hasta: 1860, izquierda: 'jc', derecha: 'dj', periodico: true }]);
+  // Si ese rato se va a cortar, se busca otro sitio del tramo, sin tocar lo cortado.
+  const e = C.planoDoble(conv, { izquierda: 'jc', cada: 40, duracion: 8, evitar: [{ desde: 1550, hasta: 1900 }] }).dobles;
+  assert.strictEqual(e.length, 1);
+  assert.ok(e[0].desde >= 1000 && (e[0].hasta <= 1550 || e[0].desde >= 1900), `fuera de lo cortado: ${JSON.stringify(e[0])}`);
+  assert.ok(planos.some(([, a]) => a === e[0].desde), 'empieza en un cambio de plano');
 });
 
 test('plano doble: no con solo dos planos cortos, ni en un plano fijado a mano, ni con una cámara congelada', () => {

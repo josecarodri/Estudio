@@ -44,7 +44,8 @@ function energia(x) {
 }
 
 /** Tramos (en segundos) donde suena el pitido de 1 kHz de la claqueta. */
-function pitidos(x, t0) {
+function pitidos(x, t0, minimo) {
+  const minSeg = minimo !== undefined ? minimo : 0.15;
   const n = Math.round(SR * 0.02);
   const hits = [];
   for (let w = 0; (w + 1) * n <= x.length; w += 1) {
@@ -58,7 +59,7 @@ function pitidos(x, t0) {
   let ini = -1;
   for (let w = 0; w <= hits.length; w += 1) {
     if (w < hits.length && hits[w]) { if (ini < 0) ini = w; } else if (ini >= 0) {
-      if ((w - ini) * 0.02 >= 0.15) tramos.push({ desde: t0 + ini * 0.02, hasta: t0 + w * 0.02 });
+      if ((w - ini) * 0.02 >= minSeg - 1e-9) tramos.push({ desde: t0 + ini * 0.02, hasta: t0 + w * 0.02 });
       ini = -1;
     }
   }

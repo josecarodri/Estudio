@@ -79,7 +79,8 @@ test('palabras: la puntuación se queda pegada a su palabra y las marcas de Whis
 test('palabras finales: las de un tramo cortado no salen y las repetidas salen en los dos sitios', () => {
   const { final, partes } = montaje();
   const mapa = YT.mapaDelMontaje(final, partes);
-  const p1 = [{ w: 'hola', a: 7, b: 7.4 }, { w: 'cortada', a: 13, b: 13.5 }, { w: 'después', a: 18, b: 18.5 }];
+  // «estirada»: Whisper la alarga sobre el hueco de una caída (empieza justo antes del corte); se dijo al final, en lo cortado.
+  const p1 = [{ w: 'hola', a: 7, b: 7.4 }, { w: 'estirada', a: 11.8, b: 15.5 }, { w: 'cortada', a: 13, b: 13.5 }, { w: 'después', a: 18, b: 18.5 }];
   const p2 = [{ w: 'repetida', a: 1.5, b: 1.9 }];
   const out = YT.palabrasFinales(mapa, [{ indice: 1, palabras: p1 }, { indice: 2, palabras: p2 }]);
   assert.deepStrictEqual(out.map((p) => [p.w, p.ini]), [['hola', 5], ['después', 12], ['repetida', 37.5], ['repetida', 56.5]]);

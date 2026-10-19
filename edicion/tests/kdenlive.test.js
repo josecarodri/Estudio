@@ -246,6 +246,14 @@ test('el reencuadre sale como rectángulo de qtblend centrado', () => {
   assert.match(xml, /name="rect">0=-540 -960 2160 3840 1</);
 });
 
+test('anchoVisible recorta por el centro antes de colocar (plano doble a altura completa)', () => {
+  const { xml } = construir(receta({ edit: [{ clip: 'a', in: 0, out: 49, anchoVisible: 0.5, pan: 480 }] }));
+  // Medio ancho: 480 px fuera a cada lado (en píxeles del proyecto) y la franja de 960x1080 en la mitad derecha.
+  assert.match(xml, /name="left">480<[\s\S]*name="right">480<[\s\S]*name="use_profile">1<[\s\S]*mlt_service">crop</);
+  assert.match(xml, /name="rect">0=960 0 960 1080 1</);
+  assert.ok(xml.indexOf('mlt_service">crop<') < xml.indexOf('name="rect">0=960'), 'el recorte va antes de colocarlo');
+});
+
 test('la opacidad se escribe en el rectángulo', () => {
   const { xml } = construir(receta({ edit: [{ clip: 'a', in: 0, out: 49, opacity: 50 }] }));
   assert.match(xml, /name="rect">0=0 0 1920 1080 0\.5</);
@@ -441,6 +449,16 @@ test('offsetBetween también con desfase negativo (empezó antes)', () => {
   other.set(base, 200);
   const r = SY.offsetBetween(base, other);
   assert.equal(r.lagBins, -200, 'empezó 200 bins antes');
+});
+
+test('offsetBetween con desfases mayores que media ventana (tramo retomado al final de una sesión larga)', () => {
+  // 2026-10-18: jc-2_llamada empezaba a los 3536 s de una referencia de 4313 s y salía a −1707 s.
+  const base = envolventeFalsa(6000, 17);
+  const tarde = SY.offsetBetween(base, base.slice(4900, 5800));
+  assert.equal(tarde.lagBins, 4900, 'empezó 4900 bins después');
+  // Y al revés: la referencia corta está casi al final de la otra.
+  const pronto = SY.offsetBetween(base.slice(4500, 5500), base);
+  assert.equal(pronto.lagBins, -4500, 'empezó 4500 bins antes');
 });
 
 test('la confianza baja cuando el audio no tiene forma reconocible', () => {

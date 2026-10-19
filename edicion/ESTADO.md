@@ -188,6 +188,9 @@ Revisión completa del proceso buscando lo que podía romperse en el próximo ep
   (3,16 con 1080x1920, medido: con 1,78 queda una franja); plano doble arriba/abajo (zoom 1,58, tilt ±alto/4). Por ★:
   40 s antes y 8 después, ajustado a frases (el inicio solo se adelanta hasta 2 s, al menos 5 s, como mucho 60).
   Subtítulos ASS (22 caracteres por línea) y −14 LUFS con ffmpeg.
+- **Clips** (`clips.js`, `clips`, 2026-10-10): horizontales de 1 a 20 min, un tema cada uno, recortados del vídeo
+  final de `entrega/` (ya con color y sonido: no se repite el acabado), con fundido 0,3/0,5 s, `.srt`, imagen para la
+  miniatura y descripción con «▶ Episodio completo» (`enlace` del episodio). `hasta` por frase acaba antes de ella.
 - **Aviso de micro bajo** (Estudio, `Llamada.nivelDelMicro`): nivel cada 100 ms de los últimos 20 s; voz = lo que pasa
   de 12 dB sobre el ruido de fondo; «bajo» si su percentil 90 no llega a −32 dBFS, «satura» con 3 picos a 0 dBFS.
   Comprobado en Chromium con un micro falso a −42 dBFS.
@@ -281,8 +284,40 @@ Además, buscando calidad y tiempo:
   dónde se van los ~25 min antes de optimizar nada. El audio no es: aquí, 30 min de WAV se analizan en ~3 s + 4,5 s.
 - `melt` instalado en el entorno de pruebas: las 4 pruebas de render ya corren también aquí (303 pruebas, 0 fallos).
 
+## Bip al final del episodio del 2026-10-10 (2026-10-14)
+- Síntoma: el vídeo publicado acaba con ~0,24 s del pitido de cierre. Causa: el `episodio.json` del equipo tenía
+  `"hasta": null`, que anulaba el `"auto"` por defecto; la parte 2 no se recortó por el final y acabó en el pitido
+  (la última voz estaba 3,4 s antes). La parte 1 llevaba un `hasta` explícito y no se vio afectada.
+- Arreglado: se quitó `hasta` del `episodio.json` del equipo (copia: `episodio.json.copia-20261014-hasta`);
+  `resolverLimites` avisa con ⚠ si `hasta` es null; `verificar` busca pitidos desde 0,06 s (antes 0,15 s, y este
+  se le escapó). Prueba nueva en `auto.test.js`. El vídeo ya publicado (400+ vistas) no se tocó.
+- `npm run test:edicion`: fallan 2 pruebas de BT.709/color que ya fallaban antes (dependen del ffmpeg de este entorno).
+
+## Episodio del 2026-10-18: llamada partida real y plano doble de vez en cuando (2026-10-19)
+- **Primer caso real de llamada partida** (la página de JC se cerró a los 58:45 de la parte 2 y se retomó 8 s después).
+  `llamadas.js` puso `jc-2_llamada` a −1707 s, antes que `jc_llamada`. Causa: `sync.offsetBetween` tomaba como
+  negativo todo desfase mayor que media ventana de la FFT; `jc-2` empezaba a los 3536 s de una referencia de 4313 s.
+  Ahora los positivos llegan hasta la longitud de la referencia (prueba en `kdenlive.test.js`). Además, si la
+  correlación se aleja más de 30 s de las horas de `session.json`, se usan esas (`DISCREPANCIA_MAXIMA_S`). Huella
+  de la llamada unida a `v: 2` para rehacer las mal unidas. Resultado: `jc-2` en 3536,00 s (el Estudio: 3535,94).
+- **Plano doble de vez en cuando** (`planoDoble.cada` 240 s, `duracion` 8 s): Jose esperaba ver a los dos a la vez
+  «de vez en cuando» y en el episodio anterior solo hubo 3 (los de intercambio rápido). Prueba en `cortes.test.js`.
+- **Plano doble a altura completa**: a media escala (zoom 0,5) quedaban franjas negras arriba y abajo. Ahora cada uno
+  es la franja central de medio ancho de su cámara (`anchoVisible: 0.5` → `crop` con `use_profile` + `qtblend`),
+  comprobado con melt sobre fotogramas reales. Los shorts siguen poniéndolos arriba y abajo (aceptan los dos formatos).
+- **Pico −0,4 dBTP** en la entrega (límite −1): +8 dB de ganancia y un chasquido de un instante (1:39:17) que
+  el AAC dispara. loudnorm apunta ahora `MARGEN_AAC_DB` (1 dB) por debajo de `picoVerdadero`: −1,6 dBTP y
+  −14,2 LUFS, medido con el audio entero. Un `alimiter` detrás lo empeoraba (+0,8). Nueva opción
+  `episodio --reanudar --solo-acabado`: repite el acabado con el render en bruto que ya hay (34 min, no 1,7 h).
+- «El vídeo arranca con la voz ya sonando» fue una respiración a −44 dB en el primer instante; «estamos» empieza
+  entero a los 0,30 s. Falsa alarma de `verificar` (mira cualquier sonido, no solo voz).
+- **Sin MP3**: lo pidió Jose (suben vídeo a YouTube y Spotify; Spotify reparte el audio). `podcast.activo: false`
+  en la configuración del equipo (copia: `episodio.json.copia-20261019-mp3`).
+- Whisper pegó la última palabra al pitido («ahoritaBEEP»): un corte por texto hasta esa frase no la encuentra.
+  Para cortar hasta el final de una parte, mejor `hasta` (segundos) de la parte en el silencio previo.
+
 ## Pendiente
-1. Primer caso real de caída: revisar en Kdenlive el empalme jc → jc-2 y la llamada unida (`llamada-unida.json`).
+1. Primer caso real de caída (2026-10-18): que Jose revise en la revisión el empalme jc → jc-2 y el labial de jc-2.
 2. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
    falta: con 0 se ve y se oye bien.
 3. En el primer episodio con todo esto: que Jose vea la notificación de Windows al terminar (el mecanismo está

@@ -515,22 +515,58 @@ function planoDoble(recipe, opciones) {
     i = j + 1;
   }
 
+  /*
+   * Además, de vez en cuando (`cada` segundos) aunque no haya intercambio rápido: en cada tramo de `cada` s
+   * sin plano doble se pone uno de `duracion` s donde más va y viene la conversación (más planos en ese rato),
+   * empezando en un cambio de plano. Nunca en lo que se va a cortar (`evitar`), ni en los primeros `cada` s
+   * (la entrada y los rótulos), ni pegado a otro plano doble. Con los rápidos solos casi no se veían (3 en el
+   * episodio del 2026-10-10, 24 s en 88 min).
+   */
+  const periodicos = [];
+  if (o.cada > 0 && lista.length) {
+    const cada = Math.round(o.cada * fps);
+    const dur = Math.round((o.duracion || 8) * fps);
+    const evitar = o.evitar || [];
+    const personas = [...new Set(V.camaras().map(personaDeClip))];
+    const ocupado = (a, b) => [...rachas, ...periodicos].some((r) => r.desde < b + cada / 2 && a < r.hasta + cada / 2);
+    const libre = (a, b) => !fijos.some(([x, y]) => x < b && a < y) && !evitar.some(({ desde, hasta }) => desde < b && a < hasta);
+    const final = lista[lista.length - 1].fin;
+    for (let w = lista[0].inicio + cada; w + dur <= final; w += cada) {
+      if (personas.length !== 2 || ocupado(w, w + cada)) continue;
+      let mejor = null;
+      for (let i = 0; i < lista.length; i += 1) {
+        const desde = lista[i].inicio;
+        if (desde < w) continue;
+        if (desde >= w + cada) break;
+        let j = i;
+        while (j + 1 < lista.length && lista[j].fin - desde < dur) j += 1;
+        const hasta = lista[j].fin - desde <= dur * 1.5 ? lista[j].fin : desde + dur;
+        if (hasta - desde < Math.round(o.minimo * fps) || hasta > final || !libre(desde, hasta) || ocupado(desde, hasta)) continue;
+        const cambios = lista.filter((p) => p.inicio > desde && p.inicio < hasta).length;
+        const centro = Math.abs(desde - (w + cada / 2));
+        if (!mejor || cambios > mejor.cambios || (cambios === mejor.cambios && centro < mejor.centro)) mejor = { desde, hasta, cambios, centro };
+      }
+      if (mejor) periodicos.push({ desde: mejor.desde, hasta: mejor.hasta, personas, periodico: true });
+    }
+  }
+
   const dobles = [];
   const encima = [];
-  for (const r of rachas) {
+  for (const r of [...rachas, ...periodicos].sort((a, b) => a.desde - b.desde)) {
     if (r.personas.length !== 2 || fijos.some(([a, b]) => a < r.hasta && r.desde < b)) continue;
     const [izq, der] = [...r.personas].sort((x, y) => (x === o.izquierda ? -1 : y === o.izquierda ? 1 : x.localeCompare(y)));
     const camara = (persona) => V.camaras().find((c) => personaDeClip(c) === persona && V.disponible(c, r.desde, r.hasta));
     const [ci, cd] = [camara(izq), camara(der)];
     if (!ci || !cd) continue;
-    // Cada una a media escala en su mitad (zoom 0,5 y un cuarto del ancho a cada lado del centro).
-    V.poner(r.desde, r.hasta, ci, V.plantillaCerca(ci, r.desde), { zoom: 0.5, pan: -ancho / 4 });
+    // Cada una a altura completa en su mitad: la franja central de medio ancho, a un cuarto del ancho del centro.
+    // (Antes iba a media escala, con franjas negras arriba y abajo: «nos vemos pequeños», Jose, 2026-10-19.)
+    V.poner(r.desde, r.hasta, ci, V.plantillaCerca(ci, r.desde), { anchoVisible: 0.5, pan: -ancho / 4 });
     const base = V.plantillaCerca(cd, r.desde);
     encima.push({
       ...JSON.parse(JSON.stringify(base)),
-      at: r.desde, duration: r.hasta - r.desde, in: (base.in || 0) + (r.desde - base.at), track: 2, zoom: 0.5, pan: ancho / 4,
+      at: r.desde, duration: r.hasta - r.desde, in: (base.in || 0) + (r.desde - base.at), track: 2, anchoVisible: 0.5, pan: ancho / 4,
     });
-    dobles.push({ desde: r.desde, hasta: r.hasta, izquierda: izq, derecha: der });
+    dobles.push({ desde: r.desde, hasta: r.hasta, izquierda: izq, derecha: der, ...(r.periodico ? { periodico: true } : {}) });
   }
   const out = V.receta();
   out.edit = [...out.edit, ...encima].sort((x, y) => x.at - y.at);
