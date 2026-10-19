@@ -248,6 +248,15 @@ páginas de cada persona escriben ahí, con la hora:
 - **`ws-cerrado` / `peer-ausente` / `ws-reconectado` / `peer-salio`**: la conexión con la sala, con el código de cierre
   (`1006` = corte sin aviso, que es lo típico de un fallo de red o de que el navegador se cierre de golpe).
 - **`error`**: errores de la página, del grabador o de la cámara.
+- **`registro-atasco`**: el registro de esa página estuvo un rato sin llegar (desde cuándo, cuántos intentos y por qué);
+  lo de ese rato llega después, con su `hora_cliente`. Cada latido lleva `registro_cola` (lo que espera para salir).
+
+Cómo llega el registro de las páginas: cada 5 s, con una petición normal, una a la vez y cortada a los 15 s si el
+servidor no contesta (luego se reintenta, sin perder ni repetir nada). Solo al ocultarse o cerrarse la página va con
+`sendBeacon`, en un paquete de menos de 30 KB que incluye lo que estuviera en camino. Antes los envíos normales iban
+con `keepalive`: el navegador solo deja 64 KiB de esos en vuelo y, agotados, los rechaza todos; el 2026-10-18 el
+registro del PC de JC (Edge) no llegó en 70 minutos (llegó de golpe cuando el paquete pasó de 60 000 caracteres y
+salió sin `keepalive`) y se perdieron sus últimos 7 minutos al cerrarse la página.
 - Al avisar de un problema, **guarda ese archivo** (y, en Windows, mira si Edge o Chrome dejaron un informe en
   `%LOCALAPPDATA%\Microsoft\Edge\User Data\Crashpad\reports`).
 
