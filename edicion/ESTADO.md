@@ -270,6 +270,11 @@ Además, buscando calidad y tiempo:
   por defecto), y el vídeo salía sin etiqueta: colores un poco desplazados (piel algo más cálida, rojos más intensos).
   Ahora las dos conversiones dicen su matriz y la salida va etiquetada BT.709. Medido: el mismo vídeo con y sin etiqueta
   da el mismo resultado. **Puede verse un poco distinto de los primeros episodios** (más fiel a la cámara).
+- **Etiquetas BT.709 con ffmpeg 9** (2026-10-10): el ffmpeg del PC (9.0.2) toma primarios y transferencia de los
+  fotogramas e ignora `-color_primaries`/`-color_trc`: si el render no los traía, el final salía solo con la matriz
+  BT.709 (los colores, bien: los píxeles son los mismos; YouTube y Spotify suponen BT.709 en HD). Ahora el acabado y los
+  shorts terminan la cadena con `setparams` (solo etiqueta, no toca la imagen). Además, con ffmpeg 9 (no con 6.1), `-colorspace`
+  al codificar también decide la conversión RGB→YUV: en las pruebas, las etiquetas se ponen con `h264_metadata`.
 - **Spotify** (sus especificaciones de vídeo: sin listas de edición, primera imagen a ≤ 50 ms, BT.709): el MP4 de
   ffmpeg llevaba listas de edición. Ahora va sin ellas (`-use_editlist 0` y tiempos negativos en los B); el silencio
   inicial del AAC (1024 muestras) se compensa recortando lo mismo del principio. Medido con clics: el sonido cae exacto

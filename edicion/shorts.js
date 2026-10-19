@@ -158,7 +158,7 @@ function aAss(cues, { ancho = 1080, alto = 1920, familia = 'Arial' } = {}) {
 /*
  * Hace un short: la receta vertical con melt y, encima, el color y el sonido del episodio, los subtítulos y el
  * volumen para el móvil (−14 LUFS) con ffmpeg. h: { final, media (byId), desde, hasta, palabras, dir, salida,
- * melt (comando), compositing, docVersion, filtrosVideo, filtrosAudio, etiquetasColor }. Devuelve
+ * melt (comando), compositing, docVersion, filtrosVideo, filtrosAudio, etiquetasColor, filtroColor }. Devuelve
  * { segundos, subtitulos } o { error }.
  */
 function hacerShort(h) {
@@ -187,7 +187,8 @@ function hacerShort(h) {
   if (fuente) fs.copyFileSync(fuente.archivo, path.join(h.dir, path.basename(fuente.archivo)));
   fs.writeFileSync(path.join(h.dir, 'short.ass'), aAss(cues, { familia: fuente ? fuente.familia : 'Arial' }), 'utf8');
   // El color y el sonido del episodio (h.filtrosVideo, h.filtrosAudio: los del acabado), y los subtítulos encima.
-  const vf = [...(h.filtrosVideo || []), ...(cues.length ? ['subtitles=short.ass:fontsdir=.'] : [])];
+  // h.filtroColor (setparams) etiqueta los fotogramas: ffmpeg 9 ignora -color_primaries y -color_trc (ver acabado).
+  const vf = [...(h.filtrosVideo || []), ...(cues.length ? ['subtitles=short.ass:fontsdir=.'] : []), ...(h.filtroColor ? [h.filtroColor] : [])];
   const af = [...(h.filtrosAudio || []), 'loudnorm=I=-14:TP=-1.5:LRA=11'].join(',');
   const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', vertical, ...(vf.length ? ['-vf', vf.join(',')] : []), '-af', af,
     '-c:v', 'libx264', '-crf', '19', '-preset', 'medium', '-pix_fmt', 'yuv420p', ...(h.etiquetasColor || []),

@@ -518,8 +518,16 @@ function colorDelVideo(archivo) {
   const sd = ['smpte170m', 'bt470bg'].includes(s.color_space) || (sinEtiqueta && Number(s.height) > 0 && Number(s.height) < 720);
   return sd ? COLOR_SD : COLOR_HD;
 }
-const COLOR_HD = { matriz: 'bt709', etiquetas: ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv'] };
-const COLOR_SD = { matriz: 'bt601', etiquetas: ['-colorspace', 'smpte170m', '-color_primaries', 'smpte170m', '-color_trc', 'smpte170m', '-color_range', 'tv'] };
+const COLOR_HD = {
+  matriz: 'bt709',
+  etiquetas: ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv'],
+  filtro: 'setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709',
+};
+const COLOR_SD = {
+  matriz: 'bt601',
+  etiquetas: ['-colorspace', 'smpte170m', '-color_primaries', 'smpte170m', '-color_trc', 'smpte170m', '-color_range', 'tv'],
+  filtro: 'setparams=range=tv:color_primaries=smpte170m:color_trc=smpte170m:colorspace=smpte170m',
+};
 
 /* Primera pasada de loudnorm: mide, sin escribir nada. */
 function medirVolumen(entrada, filtros, config) {
@@ -562,13 +570,15 @@ function acabado(entrada, salida, config) {
 
   fs.mkdirSync(path.dirname(salida), { recursive: true });
   const color = colorDelVideo(entrada);
-  const vf = filtrosVideo(config, color);
+  // Las etiquetas van también en los fotogramas (setparams, al final): ffmpeg 9 toma primarios y transferencia de
+  // ellos e ignora -color_primaries y -color_trc, y si el render no los trae el vídeo salía sin ellos. No toca píxeles.
+  const vf = [...filtrosVideo(config, color), color.filtro];
   const codificar = (codificador) => {
     console.log(`codificando para YouTube y Spotify (${codificador}) → ${salida}`);
     return spawnSync('ffmpeg', [
       '-y', '-hide_banner', '-loglevel', 'error', '-stats',
       '-i', entrada,
-      ...(vf.length ? ['-vf', vf.join(',')] : []),
+      '-vf', vf.join(','),
       ...argumentosVideo(config, codificador), ...color.etiquetas,
       '-af', af, '-ar', '48000', '-c:a', 'aac', '-b:a', '256k',
       ...MP4_SIN_LISTAS_DE_EDICION,
