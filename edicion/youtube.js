@@ -79,8 +79,11 @@ function palabrasFinales(mapa, transcripciones) {
   const out = [];
   for (const { indice, palabras } of transcripciones) {
     for (const p of palabras) {
-      for (const ini of aFinal(mapa, indice, p.a)) {
-        const fin = aFinal(mapa, indice, Math.max(p.a, p.b - 0.01)).find((x) => x >= ini && x - ini < 5);
+      // Una «palabra» de más de 1,5 s es Whisper estirándola sobre un silencio (el hueco de una caída: «Hola» de
+      // 58:44 a 58:57 el 2026-10-18): se dijo al final, así que cuenta desde ahí. Si no, quedaba suelta antes de un corte.
+      const a = p.b - p.a > 1.5 ? p.b - 0.5 : p.a;
+      for (const ini of aFinal(mapa, indice, a)) {
+        const fin = aFinal(mapa, indice, Math.max(a, p.b - 0.01)).find((x) => x >= ini && x - ini < 5);
         out.push({ w: p.w, ini, fin: fin != null ? fin + 0.01 : ini + 0.3, parte: indice, t: p.a });
       }
     }

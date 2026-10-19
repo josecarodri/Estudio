@@ -23,6 +23,7 @@ const MC = require('./multicam.js');
 const M = require('./media.js');
 
 const CONFIANZA_MINIMA = 5;
+const DISCREPANCIA_MAXIMA_S = 30;
 
 /*
  * Los tramos de llamada de una parte, en orden. Si dos personas grabaron la llamada, son dos
@@ -77,7 +78,7 @@ function iniciosDeSesion(sesionJson) {
 
 function huella(archivos) {
   const datos = archivos.filter(Boolean).map((f) => { const s = fs.statSync(f); return [path.resolve(f), s.size, Math.round(s.mtimeMs)]; });
-  return crypto.createHash('sha1').update(JSON.stringify({ datos, v: 1 })).digest('hex').slice(0, 16);
+  return crypto.createHash('sha1').update(JSON.stringify({ datos, v: 2 })).digest('hex').slice(0, 16);
 }
 
 /*
@@ -142,14 +143,24 @@ function llamadaParaReloj(archivos, carpeta, opciones) {
       fuente = `correlación con ${MC.nombreBase(mejor.ancla)}`;
     }
   }
-  // 2. Si no, con la hora de inicio de cada pista que apuntó el Estudio.
-  if (!inicios && o.sesion && fs.existsSync(o.sesion)) {
+  // 2. Si no, con la hora de inicio de cada pista que apuntó el Estudio. También si la correlación
+  // la contradice por mucho: afina décimas, pero un pico falso puede mover un tramo minutos.
+  let segunSesion = null;
+  if (o.sesion && fs.existsSync(o.sesion)) {
     const desde = iniciosDeSesion(o.sesion);
     const horas = tramos.map((t) => desde[path.basename(t)]);
-    if (horas.every((h) => Number.isFinite(h))) {
-      inicios = horas.map((h) => (h - horas[0]) / 1000);
-      fuente = 'hora de inicio de cada pista (session.json)';
+    if (horas.every((h) => Number.isFinite(h))) segunSesion = horas.map((h) => (h - horas[0]) / 1000);
+  }
+  if (inicios && segunSesion) {
+    const peor = Math.max(...inicios.map((x, i) => Math.abs(x - segunSesion[i])));
+    if (peor > DISCREPANCIA_MAXIMA_S) {
+      log(`  aviso   la correlación pone los tramos a ${peor.toFixed(1)} s de lo que apuntó el Estudio: se usa la hora de session.json`);
+      inicios = null;
     }
+  }
+  if (!inicios && segunSesion) {
+    inicios = segunSesion;
+    fuente = 'hora de inicio de cada pista (session.json)';
   }
   if (!inicios) {
     return {

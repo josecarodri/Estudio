@@ -13,8 +13,8 @@ function final() {
     tracks: { video: 3, audio: 1 },
     edit: [
       { clip: 'p1_cam_jc', in: 50, at: 0, duration: 100, audio: false },
-      { clip: 'p1_cam_jc', in: 150, at: 100, duration: 100, audio: false, zoom: 0.5, pan: -480 },
-      { clip: 'p1_cam_dj', in: 200, at: 100, duration: 100, audio: false, zoom: 0.5, pan: 480, track: 2 },
+      { clip: 'p1_cam_jc', in: 150, at: 100, duration: 100, audio: false, anchoVisible: 0.5, pan: -480 },
+      { clip: 'p1_cam_dj', in: 200, at: 100, duration: 100, audio: false, anchoVisible: 0.5, pan: 480, track: 2 },
       { clip: 'rotulo_jc', in: 0, at: 20, duration: 100, audio: false, track: 3 },
       { clip: 'p1_mic_jc', in: 7, at: 0, duration: 200, audioTrack: 1 },
     ],

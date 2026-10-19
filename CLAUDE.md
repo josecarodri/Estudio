@@ -19,7 +19,7 @@ Todo lo del podcast vive en este repo: la **grabación** (el Estudio, estilo Riv
 - Para los episodios se recomienda el enlace fijo (Tailscale): con el de Cloudflare, si se reinicia el túnel, lo que el iPad tenga pendiente queda en la dirección vieja y solo se rescata con «Descargar copia».
 - **«Descargar copia» sin IndexedDB** (2026-10): da el resto, `…_camara.resto-<bytes>.mp4` (lo que aún no tenía el servidor, con la cabecera del vídeo), o avisa de que ya está todo subido; nunca un archivo vacío o con huecos sin decirlo. Se junta con `node cli.js juntar-copia <archivo> <copia>` (exacto, por los bytes del nombre); el de antes queda en `.respaldos/`, fuera de lo que se monta.
 - **El servidor solo confirma un trozo cuando está guardado y apuntado** (2026-10): si falla apuntar el progreso, el trozo se quita y el reintento lo guarda; la página no lo borra antes de tiempo.
-- **Entrega para YouTube y Spotify** (2026-10): el mismo `.mp4` vale para los dos (sin listas de edición, BT.709); `.mp3` para el podcast en audio, con capítulos.
+- **Entrega para YouTube y Spotify** (2026-10): el mismo `.mp4` vale para los dos (sin listas de edición, BT.709). **Sin MP3** (2026-10-19): suben vídeo a YouTube y a Spotify, y Spotify reparte el audio a Apple Podcasts, Amazon Music, etc. (`"podcast": { "activo": false }` en la configuración del equipo).
 
 ## Trampas
 - Para editar no hace falta descargar nada: `edicion` importa directamente de `grabaciones/` con `node cli.js importar --copiar`. Las descargas desde «Grabaciones» llevan la sesión delante: `2026-10-10_21-30-05_dj_camara.mp4`. (Las antiguas, sin sesión, llegaban como `dj_camara.mp4`, `jc_audio (1).wav`…: el `(n)` lo pone el navegador y NO dice de qué sesión es.)

@@ -49,7 +49,7 @@ const CONFIG_POR_DEFECTO = {
   rotulos: { activo: true, nombres: { jc: 'JC', dj: 'DJ' }, segundos: 4, desde: 3 },
   // Plano doble en los intercambios rápidos: si se suceden `planos` planos de menos de `corto` segundos,
   // en ese tramo se ve a los dos a la vez, cada uno en su mitad. `izquierda`: quién va a la izquierda.
-  planoDoble: { activo: true, corto: 2.5, planos: 3, minimo: 3, izquierda: 'jc' },
+  planoDoble: { activo: true, corto: 2.5, planos: 3, minimo: 3, izquierda: 'jc', cada: 240, duracion: 8 },
   // Cámara congelada, en negro o sin imagen: esos tramos se cubren con la otra cámara. `congelada` y
   // `negro`: segundos que tiene que durar para contar; `tolerancia`: diferencia entre imágenes que aún es «quieta».
   camaras: { activo: true, congelada: 4, negro: 2, tolerancia: 0.0003 },
@@ -97,7 +97,7 @@ const CONFIG_POR_DEFECTO = {
  * episodio.json de la carpeta del episodio. En el de la raíz (lo que se repite cada semana) se
  * ignoran: si no, los cortes de un episodio se aplicarían también a los siguientes.
  */
-const CLAVES_DEL_EPISODIO = ['partes', 'cortes', 'limpiezas', 'mantenerPlano', 'insertar', 'alFinal', 'capitulos', 'titulo', 'resumen', 'shorts'];
+const CLAVES_DEL_EPISODIO = ['partes', 'cortes', 'limpiezas', 'mantenerPlano', 'insertar', 'alFinal', 'capitulos', 'titulo', 'resumen', 'shorts', 'clips', 'enlace'];
 
 /* Lo que se escribe al crear un episodio: su episodio.json, de momento sin cortes. */
 const PLANTILLA_EPISODIO = { cortes: [], partes: {} };
@@ -539,9 +539,17 @@ function medirVolumen(entrada, filtros, config) {
   }
 }
 
+/*
+ * Lo que el AAC puede sumar al pico. Si hay que subir mucho (2026-10-18: +8 dB, con el pico ya en −1,3), loudnorm
+ * deja el pico justo en el objetivo (−1,0 dBTP) y al codificar un chasquido de un instante (1:39:17) salió a
+ * −0,4 dBTP. Con loudnorm apuntando 1 dB más abajo: −1,6 dBTP y −14,2 LUFS. Un limitador detrás (alimiter) lo
+ * empeoraba: cuadra el chasquido y el AAC lo dispara a +0,8.
+ */
+const MARGEN_AAC_DB = 1;
+
 /* Segunda pasada de loudnorm, con lo medido en la primera: es lo que lo hace exacto en lugar de aproximado. */
 function normalizado(config, medida) {
-  return `loudnorm=I=${config.lufsEntrega}:TP=${config.picoVerdadero}:LRA=11`
+  return `loudnorm=I=${config.lufsEntrega}:TP=${Number(config.picoVerdadero) - MARGEN_AAC_DB}:LRA=11`
     + `:measured_I=${medida.i}:measured_TP=${medida.tp}:measured_LRA=${medida.lra}`
     + `:measured_thresh=${medida.thresh}:offset=${medida.offset}:linear=true`;
 }
