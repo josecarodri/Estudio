@@ -130,7 +130,7 @@ function textoEntre(segs, desde, hasta, max = 220) {
 
 // ------------------------------------------------------------------ estado
 // Fases que dicen «ya está» (no son trabajo): no se les cuenta el tiempo hasta la siguiente orden.
-const FASES_FINALES = new Set(['listo', 'listo-con-avisos', 'error', 'montaje-listo', 'render-listo', 'revision-lista', 'shorts-listos']);
+const FASES_FINALES = new Set(['listo', 'listo-con-avisos', 'error', 'montaje-listo', 'render-listo', 'revision-lista', 'shorts-listos', 'clips-listos']);
 
 /*
  * Apunta en montaje/estado.json la fase en curso y, en `historial`, lo que tardó la anterior (si era de
