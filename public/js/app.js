@@ -346,7 +346,6 @@
       await setupAudio();           // dentro del clic: necesario en iPad
       const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
       if (cfg?.iceServers) state.iceServers = cfg.iceServers;
-      state.lanUrls = cfg?.lanUrls || [];
       state.publicUrl = cfg?.publicUrl || '';
       state.accessKey = cfg?.accessKey || '';
       state.hasTurn = !!cfg?.turn;
@@ -365,6 +364,7 @@
     $('#roomName').textContent = room;
     $('#localName').textContent = `${name} (tú)`;
     $('#inviteLink').value = inviteUrl();
+    esperarEnlace();
     updateClock(state.clock);
     Registro.iniciar({ room, peer: state.me.id, nombre: name, latido: latidoDatos });
     Registro.anotar('sala', { sala: room, nombre: name, dispositivo: state.me.device, resolucion: $('#resolution').value });
@@ -432,13 +432,30 @@
     el.classList.toggle('bad', c.rtt / 2 > 40);
   }
 
+  const enEstePc = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+
   function inviteUrl() {
-    // Prioridad: enlace público de internet; desde localhost, la IP del PC en la red local; si no, esta misma dirección.
-    const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-    const origin = state.publicUrl || (local && state.lanUrls?.length ? state.lanUrls[0] : location.origin);
+    // Siempre el enlace de internet. En el PC, mientras el túnel no está listo, no hay enlace que dar
+    // (antes salía la IP de la wifi de casa y la otra persona no conectaba).
+    if (!state.publicUrl && enEstePc()) return '';
+    const origin = state.publicUrl || location.origin;
     // El enlace público lleva la clave de acceso; sin ella el estudio no se abre desde internet.
     const key = state.publicUrl ? (state.accessKey || '') : (new URLSearchParams(location.search).get('k') || '');
     return `${origin}${location.pathname}?sala=${encodeURIComponent(state.room)}${key ? `&k=${encodeURIComponent(key)}` : ''}`;
+  }
+
+  /** En el PC, si el túnel tarda, se pregunta cada 3 s hasta tener el enlace y entonces se pone en la casilla. */
+  function esperarEnlace() {
+    if (state.publicUrl || !enEstePc()) return;
+    $('#inviteLink').placeholder = 'Preparando el enlace por internet…';
+    const t = setInterval(async () => {
+      const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
+      if (!cfg?.publicUrl) return;
+      clearInterval(t);
+      state.publicUrl = cfg.publicUrl; state.accessKey = cfg.accessKey || '';
+      $('#inviteLink').value = inviteUrl();
+      toast('Enlace por internet listo: pulsa Copiar para enviarlo.');
+    }, 3000);
   }
 
   /** Canal de eventos de la sala por WebSocket, con reconexión automática. */
@@ -1214,7 +1231,8 @@
     $('#btnCopy').addEventListener('click', async () => {
       // El enlace público puede haber llegado después de entrar (el túnel tarda unos segundos).
       const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
-      if (cfg) { state.publicUrl = cfg.publicUrl || ''; state.accessKey = cfg.accessKey || ''; state.lanUrls = cfg.lanUrls || []; $('#inviteLink').value = inviteUrl(); }
+      if (cfg) { state.publicUrl = cfg.publicUrl || ''; state.accessKey = cfg.accessKey || ''; $('#inviteLink').value = inviteUrl(); }
+      if (!$('#inviteLink').value) { toast('El enlace por internet aún no está listo. Espera unos segundos y vuelve a pulsar.', 'warn'); return; }
       try { await navigator.clipboard.writeText($('#inviteLink').value); toast('Enlace copiado'); } catch { $('#inviteLink').select(); }
     });
     $('#btnMute').addEventListener('click', () => {

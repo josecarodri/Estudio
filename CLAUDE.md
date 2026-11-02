@@ -4,7 +4,7 @@ Todo lo del podcast vive en este repo: la **grabación** (el Estudio, estilo Riv
 
 - Responder en español.
 - **Editar un episodio**: usa el skill **`/episodio`** (`.claude/skills/episodio/SKILL.md`). Trae el proceso fijo, las rutas, lo ya decidido y las trampas. No redescubras nada de eso y no leas transcripciones enteras: usa `analizar`, `verificar` y `estado`. Estado y decisiones técnicas de la edición: `edicion/ESTADO.md`.
-- Arrancar el Estudio: `npm start` (misma wifi) o `npm run internet` (túnel). Funcionamiento y decisiones de la grabación: `README.md`. Registro de lo que ocurre: `logs/estudio-AAAA-MM-DD.log` (primer sitio donde mirar si algo falla).
+- Arrancar el Estudio: `npm start` (siempre abre el enlace por internet; `npm run internet` es lo mismo). Funcionamiento y decisiones de la grabación: `README.md`. Registro de lo que ocurre: `logs/estudio-AAAA-MM-DD.log` (primer sitio donde mirar si algo falla).
 - Pruebas: `npm test` (todas; deben pasar; antes `npm install`), o por partes con `npm run test:grabacion` y `npm run test:edicion`. Las que necesitan ffmpeg o melt se saltan solas si no están.
 
 ## Ya decidido (no volver a discutirlo)
@@ -16,6 +16,7 @@ Todo lo del podcast vive en este repo: la **grabación** (el Estudio, estilo Riv
 - **Aviso de micro bajo** (2026-10): la página mide la voz de los últimos 20 s y, si llega baja (percentil 90 bajo −32 dBFS) o satura, lo dice sobre la imagen propia y sobre la de esa persona en la otra página (va en el `status`). Lógica en `Llamada.nivelDelMicro`.
 - La página borra de IndexedDB lo que el servidor ya confirmó (al volver a abrir el estudio). Antes se acumulaban ~10 GB por episodio.
 - La claqueta (pitido 1 kHz a ~1 s) alinea los audios entre sí. **Retardo imagen↔sonido de la cámara: con este equipo el ajuste correcto es 0** (elegido a oído en el episodio del 2026-10-03; el «−140 ms» que se vio antes fue una falsa alarma de VLC). No se corrige nada en la grabación. Contexto en `edicion/ESTUDIO-RETARDO-AV.md`.
+- **Sin modo «misma wifi»** (2026-11): se quitó (HTTPS 8443, certificado autofirmado, `.bat` y `lanUrls`) porque se ofrecía primero y no conectaba. El 8080 solo escucha en 127.0.0.1 y el enlace de invitación es siempre el de internet; en el PC, mientras el túnel no está listo, no hay enlace (la página espera y lo rellena). No volver a añadirlo.
 - Para los episodios se recomienda el enlace fijo (Tailscale): con el de Cloudflare, si se reinicia el túnel, lo que el iPad tenga pendiente queda en la dirección vieja y solo se rescata con «Descargar copia».
 - **«Descargar copia» sin IndexedDB** (2026-10): da el resto, `…_camara.resto-<bytes>.mp4` (lo que aún no tenía el servidor, con la cabecera del vídeo), o avisa de que ya está todo subido; nunca un archivo vacío o con huecos sin decirlo. Se junta con `node cli.js juntar-copia <archivo> <copia>` (exacto, por los bytes del nombre); el de antes queda en `.respaldos/`, fuera de lo que se monta.
 - **El servidor solo confirma un trozo cuando está guardado y apuntado** (2026-10): si falla apuntar el progreso, el trozo se quita y el reintento lo guarda; la página no lo borra antes de tiempo.

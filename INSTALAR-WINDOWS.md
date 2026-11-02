@@ -44,7 +44,7 @@ en el menú Inicio. Desde entonces, para grabar basta con abrir ese icono.
 
 Si mueves la carpeta del programa a otro sitio, vuelve a ejecutar este archivo.
 
-## 4. Grabar con alguien en otra ciudad
+## 4. Grabar
 
 1. Doble clic en el icono **Estudio** del escritorio (o en **`Estudio por internet (Windows).bat`**).
 2. La primera vez, Windows pregunta si permites a **Node.js** acceder a la red: marca **Redes privadas** y pulsa
@@ -59,7 +59,7 @@ Si mueves la carpeta del programa a otro sitio, vuelve a ejecutar este archivo.
 > **No cierres la ventana negra** mientras grabáis ni hasta que termine la subida: es el estudio. Para apagarlo,
 > ciérrala cuando acabéis. El enlace cambia cada vez que lo arrancas, así que envía el nuevo en cada sesión.
 
-Si la otra persona está en tu misma casa o red, usa en su lugar **`Estudio misma wifi (Windows).bat`**.
+Aunque estéis en la misma casa, se usa siempre este enlace por internet (ya no hay modo «misma wifi»).
 
 ## 5. Dónde están las grabaciones
 
