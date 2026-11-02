@@ -8,21 +8,18 @@
  * - Recibe por trozos las grabaciones locales de cada dispositivo y las guarda en grabaciones/.
  * - Credenciales TURN (Cloudflare u otro) para llamadas entre redes distintas.
  *
- * HTTPS (puerto 8443) con certificado autofirmado para que el iPad pueda usar cámara y micrófono
- * en la red local, y HTTP (puerto 8080) para usar en el propio PC (localhost) o detrás de un túnel.
- * Con `--internet` abre además un túnel HTTPS público de Cloudflare para invitar desde cualquier lugar.
+ * HTTP (puerto 8080) solo para el propio PC (localhost). La otra persona entra siempre por el enlace
+ * público (túnel de Cloudflare, Tailscale Funnel o uno propio en PUBLIC_URL), que exige la clave de acceso.
+ * Ya no hay acceso por la misma wifi (2026-11): confundía, porque se ofrecía primero y no conectaba.
  */
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 require('./lib/env').loadEnv(path.join(__dirname, '.env'));
 const { slug, sessionIdFromDate, wavHeader, fixWavHeader, chunkDecision, extFromMime } = require('./lib/core');
 
 const HTTP_PORT = Number(process.env.PORT || 8080);
-const HTTPS_PORT = Number(process.env.HTTPS_PORT || 8443);
 // Puerto interno (solo 127.0.0.1) al que apuntan los túneles públicos (Cloudflare / Tailscale Funnel).
 // Por aquí se exige la clave de acceso y no se pueden ver ni descargar grabaciones.
 const PUBLIC_PORT = Number(process.env.PUBLIC_PORT || 8090);
@@ -30,7 +27,6 @@ const ENV_FILE = path.join(__dirname, '.env');
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const REC_DIR = path.resolve(process.env.GRABACIONES_DIR || path.join(ROOT, 'grabaciones'));
-const CERT_DIR = path.join(ROOT, 'certs');
 const MAX_CHUNK = 64 * 1024 * 1024;
 const MAX_PEERS = 2;
 // Si una persona pierde la conexión con la sala (un parpadeo del wifi, de la red del iPad, del túnel…) no se
@@ -47,7 +43,6 @@ const slog = (evento, datos) => registro.escribir('servidor', evento, datos);
 
 const now = () => performance.timeOrigin + performance.now();
 const ACCESS_KEY = ensureAccessKey();
-let httpsReady = false;
 let publicUrl = process.env.PUBLIC_URL || '';
 
 // ---------------------------------------------------------------- servidores ICE (STUN/TURN)
@@ -223,10 +218,9 @@ async function handle(req, res) {
   if (parts[1] === 'time') return json(res, 200, { now: now() });
 
   if (parts[1] === 'config') {
-    const lanUrls = httpsReady ? lanAddresses().map((ip) => `https://${ip}:${HTTPS_PORT}`) : [];
     // La clave solo se entrega en el PC del estudio (para construir el enlace de invitación).
     const accessKey = isLocalRequest(req) ? ACCESS_KEY : undefined;
-    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), lanUrls, publicUrl, accessKey });
+    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), publicUrl, accessKey });
   }
 
   // /api/rooms/:room/...
@@ -735,40 +729,6 @@ function onRequest(req, res) {
 }
 
 // ---------------------------------------------------------------- arranque
-function lanAddresses() {
-  const out = [];
-  for (const list of Object.values(os.networkInterfaces())) {
-    for (const a of list || []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
-  }
-  return out;
-}
-
-async function loadOrCreateCert(ips) {
-  const keyFile = path.join(CERT_DIR, 'key.pem');
-  const certFile = path.join(CERT_DIR, 'cert.pem');
-  const ipsFile = path.join(CERT_DIR, 'ips.json');
-  const wanted = JSON.stringify([...ips].sort());
-  if (fs.existsSync(keyFile) && fs.existsSync(certFile) && fs.existsSync(ipsFile) && fs.readFileSync(ipsFile, 'utf8') === wanted) {
-    return { key: fs.readFileSync(keyFile), cert: fs.readFileSync(certFile) };
-  }
-  let selfsigned;
-  try { selfsigned = require('selfsigned'); } catch {
-    console.warn('⚠  Falta la dependencia "selfsigned" (ejecuta npm install). Sin HTTPS el iPad no podrá usar la cámara.');
-    return null;
-  }
-  const altNames = [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }, ...ips.map((ip) => ({ type: 7, ip }))];
-  const pems = await selfsigned.generate([{ name: 'commonName', value: 'Estudio local' }], {
-    keySize: 2048, algorithm: 'sha256',
-    notAfterDate: new Date(Date.now() + 365 * 24 * 3600 * 1000),
-    extensions: [{ name: 'basicConstraints', cA: false }, { name: 'subjectAltName', altNames }],
-  });
-  fs.mkdirSync(CERT_DIR, { recursive: true });
-  fs.writeFileSync(keyFile, pems.private);
-  fs.writeFileSync(certFile, pems.cert);
-  fs.writeFileSync(ipsFile, wanted);
-  return { key: pems.private, cert: pems.cert };
-}
-
 /** Abre un túnel HTTPS público de Cloudflare (sin cuenta) hacia el servidor local. */
 async function startTunnel() {
   let cf;
@@ -862,7 +822,6 @@ async function startTailscale() {
 
 async function main() {
   fs.mkdirSync(REC_DIR, { recursive: true });
-  const ips = lanAddresses();
   const httpServer = http.createServer(onRequest);
   attachSignaling(httpServer);
   await new Promise((r) => {
@@ -871,7 +830,7 @@ async function main() {
       else console.error(err);
       process.exit(1);
     });
-    httpServer.listen(HTTP_PORT, r);
+    httpServer.listen(HTTP_PORT, '127.0.0.1', r);
   });
   slog('arranque', { pid: process.pid, node: process.version, turn: hasTurn(), grabaciones: REC_DIR, logs: registro.carpeta() });
   // Un error que se escapa también queda anotado (y se muestra), para no perder la pista de por qué cayó el servidor.
@@ -880,37 +839,23 @@ async function main() {
   console.log(`\n🎙  Estudio en marcha. Grabaciones en: ${REC_DIR}`);
   console.log(`   Registro de lo que ocurre: ${registro.carpeta()}\n`);
   console.log(`   En este PC:          http://localhost:${HTTP_PORT}`);
-  const tls = await loadOrCreateCert(ips);
-  if (tls) {
-    const httpsServer = https.createServer(tls, onRequest);
-    attachSignaling(httpsServer);
-    httpsReady = await new Promise((r) => {
-      httpsServer.once('error', () => { console.warn(`⚠  El puerto ${HTTPS_PORT} está ocupado: sin acceso por la wifi local.`); r(false); });
-      httpsServer.listen(HTTPS_PORT, () => r(true));
-    });
-    if (httpsReady) for (const ip of ips) console.log(`   Misma wifi (iPad):   https://${ip}:${HTTPS_PORT}   (certificado autofirmado: «Mostrar detalles» → «visitar este sitio web»)`);
-  }
   console.log(`   TURN: ${hasTurn() ? 'configurado ✓' : 'no configurado (opcional, ver .env.ejemplo)'}`);
   const wantsTailscale = process.argv.includes('--tailscale') || String(process.env.PUBLICO || '').toLowerCase() === 'tailscale';
-  const wantsInternet = wantsTailscale || process.argv.includes('--internet') || process.env.INTERNET === '1';
-  const ownTunnel = !!process.env.PUBLIC_URL && !wantsInternet;   // túnel propio hacia PUBLIC_PORT
-  if (wantsInternet || ownTunnel) {
-    // Servidor solo para los túneles: escucha únicamente en este PC y exige la clave de acceso.
-    const publicServer = http.createServer(onPublicRequest);
-    attachSignaling(publicServer, { requireKey: true });
-    await new Promise((r, j) => { publicServer.once('error', j); publicServer.listen(PUBLIC_PORT, '127.0.0.1', r); })
-      .catch((err) => { console.error(`✗ El puerto ${PUBLIC_PORT} está ocupado (${err.code}). Usa PUBLIC_PORT=8091.`); process.exit(1); });
-  }
+  const ownTunnel = !!process.env.PUBLIC_URL && !wantsTailscale;   // túnel propio hacia PUBLIC_PORT
+  // Servidor solo para los túneles: escucha únicamente en este PC y exige la clave de acceso.
+  // Siempre se abre un enlace por internet: es la única forma de que entre la otra persona.
+  const publicServer = http.createServer(onPublicRequest);
+  attachSignaling(publicServer, { requireKey: true });
+  await new Promise((r, j) => { publicServer.once('error', j); publicServer.listen(PUBLIC_PORT, '127.0.0.1', r); })
+    .catch((err) => { console.error(`✗ El puerto ${PUBLIC_PORT} está ocupado (${err.code}). Usa PUBLIC_PORT=8091.`); process.exit(1); });
   if (wantsTailscale) {
     console.log('\n   Publicando con Tailscale Funnel…');
     try { await startTailscale(); } catch (err) { console.error(`✗ ${err.message}`); }
-  } else if (wantsInternet) {
+  } else if (!ownTunnel) {
     console.log('\n   Abriendo enlace público por internet…');
     try { await startTunnel(); } catch (err) {
       console.error(`✗ No se pudo abrir el túnel: ${err.message}. Comprueba la conexión a internet (o un cortafuegos que bloquee cloudflared) y vuelve a probar.`);
     }
-  } else {
-    console.log('\n   ¿La otra persona está en otra ciudad? Arranca con: npm run internet\n');
   }
   if (process.argv.includes('--abrir')) openBrowser(`http://localhost:${HTTP_PORT}`);
 }

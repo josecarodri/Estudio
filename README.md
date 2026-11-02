@@ -135,11 +135,12 @@ Los túneles apuntan a un puerto interno (8090, solo accesible desde el propio P
 enlace de invitación (`&k=…`, guardada en `.env` como `CLAVE_ACCESO`) y **no da acceso a las grabaciones**: estas solo
 se ven desde `http://localhost:8080` en el PC del estudio.
 
-## Uso en la misma wifi
+## Sin modo «misma wifi»
 
-`npm start` y abre en el PC `http://localhost:8080`. El enlace de invitación apuntará a `https://<IP-del-PC>:8443`.
-Como el certificado es autofirmado, Safari avisa: **Mostrar detalles → visitar este sitio web → Visitar**. Si el PC
-tiene cortafuegos, permite a Node.js conexiones en red privada.
+Se quitó (2026-11): el estudio arrancaba ofreciendo primero las direcciones de la wifi local y el enlace podía salir
+con la IP de la casa, que no conectaba. Ahora `npm start` y `npm run internet` hacen lo mismo: abren siempre el enlace
+por internet, aunque estéis en la misma casa. `http://localhost:8080` solo responde en el propio PC. Si el túnel tarda,
+la casilla del enlace dice «Preparando el enlace por internet…» y se rellena sola.
 
 ## Cómo se sincroniza
 
@@ -308,5 +309,5 @@ edicion/                 Editor del podcast: montaje en Kdenlive, render y acaba
 .claude/skills/episodio/ Proceso fijo para editar un episodio con Claude Code
 ```
 
-Variables (en `.env` o en el entorno): `PORT` (8080), `HTTPS_PORT` (8443), `GRABACIONES_DIR`, `PUBLIC_URL`, `PUBLICO` (`cloudflare`/`tailscale`), `CLAVE_ACCESO`, `PUBLIC_PORT` (8090),
+Variables (en `.env` o en el entorno): `PORT` (8080), `GRABACIONES_DIR`, `PUBLIC_URL`, `PUBLICO` (`cloudflare`/`tailscale`), `CLAVE_ACCESO`, `PUBLIC_PORT` (8090),
 `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `TURN_URL`, `TURN_USER`, `TURN_PASS`.

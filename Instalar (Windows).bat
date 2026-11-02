@@ -22,8 +22,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo  Listo. Para grabar, haz doble clic en:
-echo    "Estudio por internet (Windows).bat"  si la otra persona está en otro lugar
-echo    "Estudio misma wifi (Windows).bat"    si estáis en la misma red
+echo  Listo. Para grabar, haz doble clic en "Estudio por internet (Windows).bat"
+echo  (o crea el icono con "Crear acceso directo (Windows).bat").
 echo.
 pause
