@@ -291,7 +291,7 @@ Además, buscando calidad y tiempo:
 - Arreglado: se quitó `hasta` del `episodio.json` del equipo (copia: `episodio.json.copia-20261014-hasta`);
   `resolverLimites` avisa con ⚠ si `hasta` es null; `verificar` busca pitidos desde 0,06 s (antes 0,15 s, y este
   se le escapó). Prueba nueva en `auto.test.js`. El vídeo ya publicado (400+ vistas) no se tocó.
-- `npm run test:edicion`: fallan 2 pruebas de BT.709/color que ya fallaban antes (dependen del ffmpeg de este entorno).
+- `npm run test:edicion`: fallaban 2 pruebas de BT.709/color (arregladas el 2026-11-02, ver más abajo).
 
 ## Episodio del 2026-10-18: llamada partida real y plano doble de vez en cuando (2026-10-19)
 - **Primer caso real de llamada partida** (la página de JC se cerró a los 58:45 de la parte 2 y se retomó 8 s después).
@@ -315,6 +315,17 @@ Además, buscando calidad y tiempo:
   en la configuración del equipo (copia: `episodio.json.copia-20261019-mp3`).
 - Whisper pegó la última palabra al pitido («ahoritaBEEP»): un corte por texto hasta esa frase no la encuentra.
   Para cortar hasta el final de una parte, mejor `hasta` (segundos) de la parte en el silencio previo.
+
+## Episodio del 2026-11-01 y ffmpeg 9 (2026-11-02)
+- **Segundo caso real de llamada partida** (página de JC cerrada a los 59:02; retomada 10 s después): se unió sola
+  (`jc-2` en 3555,70 s). El corte de la caída se alargó a mano hasta antes de «Te decía que…» para quitar los «hola».
+- **El render rehacía `youtube.md` con la configuración leída al empezar**: el título y los capítulos escritos durante
+  las 2–3 h no salían. Ahora `episodio` relee el `episodio.json` antes de ese paso.
+- **ffmpeg 9 ignora `-color_primaries` y `-color_trc`** (la salida lleva lo que traiga cada fotograma). El episodio
+  salió bien porque el bruto de melt trae las tres etiquetas; con una entrada sin ellas solo quedaba la matriz. Ahora
+  acabado, shorts y clips terminan `-vf` con `setparams` (`COLOR_HD.filtro`), que solo cambia la etiqueta. Eran las
+  2 pruebas que fallaban; la de color fallaba porque sus dos vídeos de partida ya no tenían los mismos píxeles (con
+  los mismos píxeles, el filtro da lo mismo con y sin etiqueta: el color está bien). 318 pruebas, 0 fallos.
 
 ## Pendiente
 1. Primer caso real de caída (2026-10-18): que Jose revise en la revisión el empalme jc → jc-2 y el labial de jc-2.
