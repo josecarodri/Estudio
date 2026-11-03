@@ -1677,7 +1677,8 @@ function cmdEpisodio(args) {
     console.log('  YouTube: no se prepara solo (se renderizó el proyecto retocado en Kdenlive y sus tiempos no son los de la receta)');
   } else {
     try {
-      const y = paqueteYoutube(r, config, { transcribirSiFalta: false });
+      // Se relee: el render dura horas y mientras tanto se suelen escribir el título y los capítulos.
+      const y = paqueteYoutube(r, EP.cargarConfig(r.base).config, { transcribirSiFalta: false });
       if (y) console.log(`  YouTube: ${y.subtitulos} subtítulos, ${y.capitulos.length} capítulos → entrega/youtube.md${y.faltan.length ? ` (falta ${y.faltan.length} cosa(s))` : ''}`);
     } catch (e) {
       console.log(`  aviso   lo de YouTube no se pudo preparar: ${e.message}`);
@@ -2031,7 +2032,7 @@ function paqueteYoutube(r, config, { transcribirSiFalta }) {
     `- Subtítulos: \`entrega/${nombre}.srt\` (YouTube Studio → Subtítulos → Añadir idioma: español → Subir archivo → «Con tiempos»)`,
     '',
     '## Spotify',
-    `- En vídeo: el mismo \`entrega/${nombre}.mp4\` (cumple lo que pide Spotify: sin listas de edición, BT.709). En audio: \`entrega/${nombre}.mp3\`, con título y capítulos.`,
+    `- En vídeo: el mismo \`entrega/${nombre}.mp4\` (cumple lo que pide Spotify: sin listas de edición, BT.709).${config.podcast?.activo === false ? ' Spotify reparte el audio a Apple Podcasts, Amazon Music…' : ` En audio: \`entrega/${nombre}.mp3\`, con título y capítulos.`}`,
     '- La descripción sirve tal cual: Spotify también saca los capítulos de los tiempos del texto.',
     '',
     ...(faltan.length || cap.avisos.length ? ['## Pendiente', ...faltan.map((f) => `- Falta ${f}`), ...cap.avisos.map((a) => `- ${a}`), ''] : []),
