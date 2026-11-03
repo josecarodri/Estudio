@@ -351,7 +351,14 @@ test('color: eq delante (en YUV), una sola ida y vuelta a RGB, con la matriz del
     return r.stdout.trim();
   };
   const con = hacer('con.mp4', ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709']);
-  const sin = hacer('sin.mp4', []);
+  // El de sin etiqueta es el mismo con la etiqueta quitada, sin recodificar: desde ffmpeg 9 la etiqueta de salida
+  // cambia cómo pasa testsrc2 (RGB) a YUV, y dos vídeos hechos aparte ya no tienen los mismos píxeles.
+  const sin = path.join(dir, 'sin.mp4');
+  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', con, '-c', 'copy', '-bsf:v',
+    'h264_metadata=colour_primaries=2:transfer_characteristics=2:matrix_coefficients=2', sin]).status, 0);
+  const etiqueta = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=color_space',
+    '-of', 'csv=p=0', sin], { encoding: 'utf8' }).stdout.trim();
+  assert.strictEqual(etiqueta, 'unknown');
   assert.strictEqual(md5(con), md5(sin));
   assert.deepStrictEqual(EP.colorDelVideo(con).matriz, 'bt709');
   assert.ok(EP.colorDelVideo(con).etiquetas.includes('bt709'));

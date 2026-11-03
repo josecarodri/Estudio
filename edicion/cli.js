@@ -2092,7 +2092,7 @@ function cmdShorts(args) {
       final, media: byId, desde: x.desde, hasta: x.hasta, palabras, dir: path.join(r.montaje, 'shorts'), salida,
       melt: M.comandoMelt(melt), compositing, docVersion,
       // Con el mismo color y sonido que el episodio (antes salían sin color y sin el compresor).
-      filtrosVideo: EP.filtrosVideo(config), filtrosAudio: EP.filtrosAudio(config), etiquetasColor: EP.COLOR_HD.etiquetas, // los verticales de melt son HD
+      filtrosVideo: EP.filtrosVideo(config), filtrosAudio: EP.filtrosAudio(config), etiquetasColor: EP.COLOR_HD.etiquetas, filtroColor: EP.COLOR_HD.filtro, // los verticales de melt son HD
     });
     if (res.error) { console.error(`  error: ${res.error}`); continue; }
     const inicio = palabras.filter((p) => p.ini >= x.desde && p.ini < x.hasta).slice(0, 14).map((p) => p.w).join(' ');
@@ -2145,7 +2145,7 @@ function cmdClips(args) {
     console.log(`clip ${i + 1}: ${segundosAReloj(x.desde)} → ${segundosAReloj(x.hasta)} (${segundosAReloj(x.hasta - x.desde)}) · ${x.titulo}`);
     const res = CL.hacerClip({
       entrada, salida, desde: x.desde, hasta: x.hasta, codificador: config.codificador,
-      argumentosVideo: (c) => EP.argumentosVideo(config, c), etiquetasColor: EP.COLOR_HD.etiquetas,
+      argumentosVideo: (c) => EP.argumentosVideo(config, c), etiquetasColor: EP.COLOR_HD.etiquetas, filtroColor: EP.COLOR_HD.filtro,
     });
     if (res.error) { console.error(`  error: ${res.error}`); continue; }
     const cues = CL.subtitulosDelClip(palabras, x.desde, x.hasta);

@@ -68,12 +68,12 @@ function subtitulosDelClip(palabras, desde, hasta) {
 /*
  * Recorta [desde, hasta) del vídeo final con un fundido de 0,3 s al entrar y 0,5 s al salir (imagen y sonido) y
  * deja una imagen del tercio del clip para la miniatura. h: { entrada, salida, desde, hasta, argumentosVideo
- * (codificador) => [...], codificador, etiquetasColor }. Devuelve { segundos, codificador } o { error }.
+ * (codificador) => [...], codificador, etiquetasColor, filtroColor }. Devuelve { segundos, codificador } o { error }.
  */
 function hacerClip(h) {
   fs.mkdirSync(path.dirname(h.salida), { recursive: true });
   const dur = Math.round((h.hasta - h.desde) * 1000) / 1000;
-  const vf = `fade=t=in:d=0.3,fade=t=out:st=${(dur - 0.5).toFixed(3)}:d=0.5`;
+  const vf = `fade=t=in:d=0.3,fade=t=out:st=${(dur - 0.5).toFixed(3)}:d=0.5${h.filtroColor ? `,${h.filtroColor}` : ''}`;
   const af = `afade=t=in:d=0.3,afade=t=out:st=${(dur - 0.5).toFixed(3)}:d=0.5`;
   const codificar = (codificador) => spawnSync('ffmpeg', [
     '-v', 'error', '-y', '-ss', h.desde.toFixed(3), '-i', h.entrada, '-t', dur.toFixed(3),
