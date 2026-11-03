@@ -338,21 +338,24 @@ test('color: eq delante (en YUV), una sola ida y vuelta a RGB, con la matriz del
   assert.deepStrictEqual(EP.filtrosVideo({ color: { activo: false } }), []);
   // El mismo vídeo con y sin la etiqueta BT.709 (melt la pone) sale igual: antes, con etiqueta, ffmpeg pasaba a RGB
   // con BT.709 y volvía con BT.601, y los colores se desplazaban.
+  // La etiqueta se pone en el H.264 ya hecho (h264_metadata, sin recodificar): -colorspace al
+  // codificar también decide (en ffmpeg 9, no en 6.1) la conversión RGB→YUV del testsrc2 y los dos vídeos ya no tendrían los mismos píxeles.
   const dir = tmp();
-  const hacer = (nombre, etiqueta) => {
-    const archivo = path.join(dir, nombre);
-    assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=128x72:r=10:d=0.5', '-pix_fmt', 'yuv420p',
-      ...etiqueta, '-c:v', 'libx264', '-qp', '0', archivo]).status, 0);
-    return archivo;
-  };
-  const md5 = (archivo) => {
-    const r = spawnSync('ffmpeg', ['-v', 'error', '-i', archivo, '-vf', `${f.join(',')},format=yuv420p`, '-f', 'md5', '-'], { encoding: 'utf8' });
+  const sin = path.join(dir, 'sin.mp4');
+  const con = path.join(dir, 'con.mp4');
+  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=128x72:r=10:d=0.5', '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264', '-qp', '0', sin]).status, 0);
+  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', sin, '-c', 'copy',
+    '-bsf:v', 'h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1', con]).status, 0);
+  const md5 = (archivo, vf) => {
+    const r = spawnSync('ffmpeg', ['-v', 'error', '-i', archivo, ...(vf ? ['-vf', vf] : []), '-f', 'md5', '-'], { encoding: 'utf8' });
     assert.strictEqual(r.status, 0, r.stderr);
     return r.stdout.trim();
   };
-  const con = hacer('con.mp4', ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709']);
-  const sin = hacer('sin.mp4', []);
-  assert.strictEqual(md5(con), md5(sin));
+  assert.strictEqual(md5(con), md5(sin), 'los dos vídeos de partida son el mismo, solo cambia la etiqueta');
+  const conColor = md5(con, `${f.join(',')},format=yuv420p`);
+  assert.notStrictEqual(conColor, md5(con), 'el color cambia la imagen');
+  assert.strictEqual(conColor, md5(sin, `${f.join(',')},format=yuv420p`));
   assert.deepStrictEqual(EP.colorDelVideo(con).matriz, 'bt709');
   assert.ok(EP.colorDelVideo(con).etiquetas.includes('bt709'));
 });
@@ -439,11 +442,13 @@ function clicsEn(archivo) {
 
 test('acabado: apto para Spotify (sin listas de edición, imagen en 0), BT.709 etiquetado y el sonido exacto con la imagen', { skip: !hayFfmpeg }, () => {
   const dir = tmp();
-  // Como el render de melt: MP4 con AAC (con su lista de edición) y etiquetado BT.709.
+  // Como el render de melt: MP4 con AAC (con su lista de edición) y la matriz BT.709. Solo la matriz: el acabado
+  // tiene que poner primarios y transferencia aunque el render no los traiga (ffmpeg 9 los toma de los fotogramas e
+  // ignora -color_primaries y -color_trc; antes salían sin ellos).
   const bruto = path.join(dir, 'bruto.mp4');
   assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=320x180:r=30000/1001:d=5', '-f', 'lavfi', '-i',
     "aevalsrc='if(lt(mod(t,1),0.002)*gt(t,0.5),0.5*sin(2*PI*2000*t),0.0005*sin(2*PI*300*t))':s=48000:d=5",
-    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-colorspace', 'bt709',
     '-c:a', 'aac', '-b:a', '192k', bruto]).status, 0);
   assert.strictEqual(EP.tieneListasDeEdicion(bruto), true, 'el MP4 normal de ffmpeg sí las lleva');
   const final = path.join(dir, 'final.mp4');
