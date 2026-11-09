@@ -771,9 +771,13 @@
    */
   async function startRecording(sessionServidor, { tarde = false, retomada = false } = {}) {
     if (state.rec) return;
-    // Se libera el espacio de grabaciones anteriores ya subidas.
-    for (const u of state.uploaders.filter((x) => x.finished)) await u.deleteLocal().catch(() => {});
+    // Se libera el espacio de grabaciones anteriores ya subidas, sin esperar a que termine: borrar varios GB
+    // tarda, y esperando aquí la segunda toma empezaba tarde (podía perderse el pitido) y, como `state.rec`
+    // aún no estaba puesto, otra orden (la comprobación de cada 5 s, una reconexión) arrancaba otra grabación
+    // a la vez sobre los mismos archivos.
+    const subidas = state.uploaders.filter((u) => u.finished);
     state.uploaders = state.uploaders.filter((u) => !u.finished);
+    for (const u of subidas) u.deleteLocal().catch(() => {});
 
     const startLocal = tarde ? localNow() + 500 : sessionServidor.startAt - state.clock.offset;
     const beepLocal = tarde ? null : sessionServidor.beepAt - state.clock.offset;
@@ -1242,6 +1246,8 @@
       $('#btnMute').classList.toggle('active', !t.enabled);
     });
     document.addEventListener('visibilitychange', () => {
+      // El navegador suelta el bloqueo de pantalla al ocultarse la página: al volver se pide otra vez.
+      if (!document.hidden && state.rec) requestWakeLock();
       if (document.hidden && state.rec && isIOS) toast('En iPad no salgas de Safari mientras grabas: la cámara se detiene.', 'warn');
     });
     $('#btnCorte').addEventListener('click', () => marcar('corte'));

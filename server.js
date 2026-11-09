@@ -60,6 +60,8 @@ async function cloudflareTurn() {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ ttl: 24 * 3600 }),
+    // Con tiempo máximo: si Cloudflare no contesta, /api/config (y con él «Entrar») no se queda esperando minutos.
+    signal: AbortSignal.timeout(8000),
   });
   if (!r.ok) throw new Error(`Cloudflare TURN respondió ${r.status}`);
   const j = await r.json();
@@ -136,6 +138,8 @@ async function guardarProgreso(file, datos) {
 }
 
 function loadSession(room, id) {
+  // El identificador llega también de las páginas: solo vale un nombre de carpeta, nunca una ruta («../…»).
+  if (!id || id === '.' || id === '..' || /[/\\]/.test(id)) return null;
   const key = `${room}/${id}`;
   if (sessions.has(key)) return sessions.get(key);
   const file = path.join(sessionDir(room, id), 'session.json');
@@ -520,7 +524,9 @@ async function handle(req, res) {
         const roomDir = path.join(REC_DIR, room);
         if (!fs.statSync(roomDir).isDirectory()) continue;
         for (const id of fs.readdirSync(roomDir)) {
-          const s = loadSession(room, id);
+          // Un session.json estropeado (un corte de luz a medio escribir) no debe dejar sin lista a las demás.
+          let s = null;
+          try { s = loadSession(room, id); } catch (err) { slog('sesion-ilegible', { sala: room, sesion: id, error: err.message }); }
           if (!s) continue;
           const files = fs.readdirSync(s.dir).filter((f) => !f.startsWith('.'))
             .map((f) => ({ name: f, bytes: fs.statSync(path.join(s.dir, f)).size, url: `/grabaciones/${encodeURIComponent(room)}/${encodeURIComponent(id)}/${encodeURIComponent(f)}` }));
@@ -602,7 +608,8 @@ function onPeerSocket(ws, rawRoom, params, req) {
     slog('ws-abierto', { sala: roomName, peer: id, nombre: name, dispositivo: device, ua: req.headers['user-agent'] });
   }
   // Quien abre la sala en este mismo PC recibe el enlace de invitación ya copiado en el portapapeles.
-  const inviteCopied = room.peers.size === 1 && isLocalRequest(req) && publicUrl
+  // Solo al entrar, no en cada reconexión del canal: pisaría lo que haya copiado mientras tanto.
+  const inviteCopied = !existing && room.peers.size === 1 && isLocalRequest(req) && publicUrl
     ? copyToClipboard(inviteLink(roomName)) : false;
   send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session, inviteCopied, volvio });
   broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device, volvio }, id);

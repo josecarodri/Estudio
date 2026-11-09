@@ -244,3 +244,38 @@ test('un trozo que no se pudo apuntar no se confirma: el reintento lo guarda y s
     assert.strictEqual(datos[44 + 9600], 2);
   } finally { b.parar(); }
 });
+
+test('la sesión de una pista es un nombre de carpeta, nunca una ruta hacia otra', async () => {
+  const server = await listen();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { sesion, ws } = await grabando(base, 'ruta-a');
+    // Con «../» se llegaría a la sesión de otra sala (o a cualquier carpeta con un session.json).
+    const r = await wav(base, 'ruta-b', `../ruta-a/${sesion}`);
+    assert.strictEqual(r.status, 404);
+    assert.strictEqual(fs.existsSync(path.join(process.env.GRABACIONES_DIR, 'ruta-a', sesion, 'dj_audio.wav')), false);
+    assert.strictEqual((await wav(base, 'ruta-a', sesion)).status, 200);
+    ws.close();
+  } finally {
+    server.closeAllConnections(); server.close();
+  }
+});
+
+test('un session.json estropeado no deja sin lista al resto de grabaciones', async () => {
+  const server = await listen();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { sesion, ws } = await grabando(base, 'lista');
+    const rota = path.join(process.env.GRABACIONES_DIR, 'lista', '2020-01-01_00-00-00');
+    fs.mkdirSync(rota, { recursive: true });
+    fs.writeFileSync(path.join(rota, 'session.json'), '{ "room": "lista", "id": ');
+    const r = await fetch(`${base}/api/sessions`);
+    assert.strictEqual(r.status, 200);
+    const ids = (await r.json()).map((s) => s.id);
+    assert.ok(ids.includes(sesion));
+    assert.ok(!ids.includes('2020-01-01_00-00-00'));
+    ws.close();
+  } finally {
+    server.closeAllConnections(); server.close();
+  }
+});
