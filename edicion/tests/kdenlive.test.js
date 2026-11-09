@@ -673,6 +673,33 @@ test('buildRecipe corta a quien habla y deja el audio continuo', () => {
   assert.equal(recipe.tracks.audio, 2);
 });
 
+test('buildRecipe: tras un relevo del Estudio (jc y jc-2 pegados), los micros no se solapan en la pista', () => {
+  const binHz = 100;
+  const receta = (inicioJc2) => MC.buildRecipe({
+    people: [
+      { id: 'dj', cam: '/v/dj_camara.mp4', mic: '/v/dj_audio.wav' },
+      { id: 'jc', cam: '/v/jc_camara.mp4', mic: '/v/jc_audio.wav' },
+      { id: 'jc-2', cam: '/v/jc-2_camara.mp4', mic: '/v/jc-2_audio.wav' },
+    ],
+    offsets: {
+      '/v/dj_camara.mp4': 0, '/v/dj_audio.wav': 0, '/v/jc_camara.mp4': 0, '/v/jc_audio.wav': 0,
+      '/v/jc-2_camara.mp4': inicioJc2, '/v/jc-2_audio.wav': inicioJc2,
+    },
+    // El micro de jc dura 30 s justos; el de jc-2 empieza donde acaba (el relevo) y llega al final.
+    probes: { '/v/jc_audio.wav': { seconds: 30 }, '/v/jc-2_audio.wav': { seconds: 30 }, '/v/dj_audio.wav': { seconds: 60 } },
+    turns: [{ startBin: 0, endBin: 60 * binHz, id: 'dj' }],
+    fps: 30, binHz, fromBin: 0, toBin: 60 * binHz,
+  });
+  // La sincronía de cada tramo se mide por separado: jc-2 puede caer un par de frames antes de que acabe jc.
+  for (const inicio of [30, 29.95, 30.04]) {
+    const r = receta(inicio);
+    assert.deepEqual(R.validate(r).errors, []);
+    const [a, b] = r.edit.filter((c) => c.audioTrack === 2);
+    assert.ok(a.at + a.duration <= b.at, `sin solape con jc-2 en ${inicio} s`);
+    assert.ok(b.at - (a.at + a.duration) <= 2, 'y sin hueco apreciable (como mucho, el redondeo a frames)');
+  }
+});
+
 test('buildRecipe: si de alguien falta el micro, va el sonido de su cámara (entero, solo el audio)', () => {
   const binHz = 100;
   const sesion = (probeDj) => MC.buildRecipe({

@@ -167,7 +167,42 @@
     return '';
   }
 
+  /**
+   * ¿Qué le pasa a la grabación de esta página? Devuelve el aviso (lo más grave primero) o '' si va bien.
+   *  - iniciada: los grabadores ya arrancaron (antes, durante la cuenta atrás, están parados y es normal).
+   *  - grabadores: [{ pista: 'camara' | 'llamada', estado }] (el `state` de MediaRecorder).
+   *  - camara / micro: { estado: 'live' | 'ended', sinSenal } de las pistas del dispositivo.
+   *  - audio: estado del AudioContext; discoLibre: bytes libres en el PC del estudio (null si no se sabe).
+   */
+  function problemaDeGrabacion({ iniciada, grabadores, camara, micro, audio, discoLibre, discoMinimo = 2 * 2 ** 30 }) {
+    if (camara && camara.estado === 'ended') return 'La cámara se ha detenido: no se está grabando la imagen';
+    if (micro && micro.estado === 'ended') return 'El micrófono se ha detenido: no se está grabando la voz';
+    const parado = iniciada && (grabadores || []).find((g) => g.estado === 'inactive');
+    if (parado) return parado.pista === 'camara' ? 'La cámara ha dejado de grabarse' : `Ha dejado de grabarse: ${parado.pista}`;
+    if (audio && audio !== 'running') return 'El audio se ha detenido: toca la pantalla';
+    if (camara && camara.sinSenal) return 'La cámara no da imagen';
+    if (Number.isFinite(discoLibre) && discoLibre < discoMinimo) return 'El disco del PC del estudio está casi lleno';
+    return '';
+  }
+
+  /**
+   * Aviso al entrar si falta sitio para un episodio. `discoLibre`: bytes libres en el PC del estudio;
+   * `propio`: lo que dice el navegador de este dispositivo ({ quota, usage }). '' si hay de sobra o no se sabe.
+   */
+  function avisoDeEspacio({ discoLibre, propio, minimoDisco = 20 * 2 ** 30, minimoPropio = 10 * 2 ** 30 }) {
+    const gb = (n) => (n / 2 ** 30).toFixed(1).replace('.', ',');
+    if (Number.isFinite(discoLibre) && discoLibre < minimoDisco) {
+      return `En el disco del PC del estudio quedan ${gb(discoLibre)} GB libres: un episodio ocupa unos 10 GB. Libera espacio antes de grabar.`;
+    }
+    const libre = propio && Number.isFinite(propio.quota) && Number.isFinite(propio.usage) ? propio.quota - propio.usage : null;
+    if (libre !== null && libre < minimoPropio) {
+      return `Este dispositivo tiene poco sitio para guardar la grabación mientras se sube (${gb(libre)} GB). Libera espacio si puedes.`;
+    }
+    return '';
+  }
+
   const api = {
+    problemaDeGrabacion, avisoDeEspacio,
     viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio,
     recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro, avisoDeMarca, textoBotonCorte,
     nivelDelMicro, avisoDeMicro,

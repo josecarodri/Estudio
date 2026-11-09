@@ -60,6 +60,8 @@ async function cloudflareTurn() {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ ttl: 24 * 3600 }),
+    // Con tiempo máximo: si Cloudflare no contesta, /api/config (y con él «Entrar») no se queda esperando minutos.
+    signal: AbortSignal.timeout(8000),
   });
   if (!r.ok) throw new Error(`Cloudflare TURN respondió ${r.status}`);
   const j = await r.json();
@@ -115,8 +117,58 @@ function sessionDir(room, id) { return path.join(REC_DIR, room, id); }
 /** Bytes de cabecera al principio del archivo de una pista (los WAV llevan 44). */
 const cabecera = (t) => (t.ext === 'wav' ? 44 : 0);
 
+/*
+ * session.json se escribe aparte y se cambia de nombre, como el progreso de las pistas: así nunca queda a
+ * medias (un corte de luz mientras se escribía lo dejaba ilegible, y con él la sesión entera).
+ */
 function saveSession(s) {
-  fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({ ...s, dir: undefined }, null, 2));
+  const file = path.join(s.dir, 'session.json');
+  const texto = JSON.stringify({ ...s, dir: undefined }, null, 2);
+  const tmp = `${file}.tmp`;
+  try {
+    fs.writeFileSync(tmp, texto);
+    for (let i = 0; ; i++) {
+      try { fs.renameSync(tmp, file); return; } catch (err) {
+        // En Windows, el antivirus o el indexador pueden tener el archivo abierto un instante.
+        if (i >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+      }
+    }
+  } catch (err) {
+    // Si no se pudo de esa forma, como antes: mejor guardado directamente que sin guardar.
+    slog('sesion-guardada-directa', { sesion: s.id, error: err.code || err.message });
+    fs.writeFileSync(file, texto);
+    try { fs.unlinkSync(tmp); } catch { /* no quedó */ }
+  }
+}
+
+/** Espacio libre (bytes) en el disco de las grabaciones, o null si no se puede saber. Se mira cada 10 s como mucho. */
+let disco = { at: 0, libre: null };
+async function discoLibre() {
+  if (Date.now() - disco.at < 10000) return disco.libre;
+  let libre = null;
+  try { const st = await fs.promises.statfs(REC_DIR); libre = st.bavail * st.bsize; } catch { /* Node antiguo o carpeta sin crear */ }
+  disco = { at: Date.now(), libre };
+  return libre;
+}
+
+/*
+ * El servidor se reinició en plena grabación y ya no sabe que la sala graba: las marcas fallaban, cada persona
+ * tenía que pulsar Detener por su cuenta y una página caída no podía retomar. Si una página dice que sigue
+ * grabando una sesión que quedó sin parar, la sala la recupera. Solo así (nunca al arrancar, mirando el disco):
+ * una sesión vieja sin cerrar no debe poner a grabar a nadie.
+ */
+function recuperarGrabacion(room, roomName, id) {
+  if (room.session || !id) return;
+  let s = null;
+  try { s = loadSession(roomName, String(id)); } catch { /* ilegible: no se recupera */ }
+  if (!s || s.room !== roomName || s.stopAt) return;
+  const abierta = (s.marcas || []).find((m) => m.tipo === 'corte' && m.fin == null);
+  room.session = {
+    id: s.id, startAt: s.startAt, beepAt: s.beepAt, recording: true,
+    ...(abierta ? { corteAbierto: { inicio: abierta.inicio, nombre: abierta.nombre } } : {}),
+  };
+  slog('grabacion-recuperada', { sala: roomName, sesion: s.id });
+  broadcast(room, 'marca', { session: room.session });   // las páginas ponen al día su botón ✂
 }
 
 /*
@@ -136,6 +188,8 @@ async function guardarProgreso(file, datos) {
 }
 
 function loadSession(room, id) {
+  // El identificador llega también de las páginas: solo vale un nombre de carpeta, nunca una ruta («../…»).
+  if (!id || id === '.' || id === '..' || /[/\\]/.test(id)) return null;
   const key = `${room}/${id}`;
   if (sessions.has(key)) return sessions.get(key);
   const file = path.join(sessionDir(room, id), 'session.json');
@@ -220,7 +274,7 @@ async function handle(req, res) {
   if (parts[1] === 'config') {
     // La clave solo se entrega en el PC del estudio (para construir el enlace de invitación).
     const accessKey = isLocalRequest(req) ? ACCESS_KEY : undefined;
-    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), publicUrl, accessKey });
+    return json(res, 200, { iceServers: await iceServers(), turn: hasTurn(), publicUrl, accessKey, discoLibre: await discoLibre() });
   }
 
   // /api/rooms/:room/...
@@ -231,7 +285,10 @@ async function handle(req, res) {
 
     // Estado de la grabación de la sala. Las páginas lo consultan cada pocos segundos por si se
     // perdieron la orden de grabar o de parar (un corte de su conexión justo en ese momento).
-    if (action === 'sesion' && req.method === 'GET') return json(res, 200, { session: room.session, now: now() });
+    if (action === 'sesion' && req.method === 'GET') {
+      recuperarGrabacion(room, roomName, url.searchParams.get('grabo'));
+      return json(res, 200, { session: room.session, now: now(), discoLibre: await discoLibre() });
+    }
 
     if (action === 'signal' && req.method === 'POST') {
       const msg = await readJson(req);
@@ -520,7 +577,9 @@ async function handle(req, res) {
         const roomDir = path.join(REC_DIR, room);
         if (!fs.statSync(roomDir).isDirectory()) continue;
         for (const id of fs.readdirSync(roomDir)) {
-          const s = loadSession(room, id);
+          // Un session.json estropeado (un corte de luz a medio escribir) no debe dejar sin lista a las demás.
+          let s = null;
+          try { s = loadSession(room, id); } catch (err) { slog('sesion-ilegible', { sala: room, sesion: id, error: err.message }); }
           if (!s) continue;
           const files = fs.readdirSync(s.dir).filter((f) => !f.startsWith('.'))
             .map((f) => ({ name: f, bytes: fs.statSync(path.join(s.dir, f)).size, url: `/grabaciones/${encodeURIComponent(room)}/${encodeURIComponent(id)}/${encodeURIComponent(f)}` }));
@@ -543,7 +602,7 @@ function attachSignaling(server, { requireKey = false } = {}) {
     const url = new URL(req.url, 'http://x');
     const m = /^\/api\/rooms\/([^/]+)\/ws$/.exec(url.pathname);
     if (requireKey) req.viaPublic = true;
-    if (!m || (requireKey && !hasValidKey(req, url))) {
+    if (!m || (requireKey ? !hasValidKey(req, url) : !esDeEstePc(req))) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
@@ -602,7 +661,8 @@ function onPeerSocket(ws, rawRoom, params, req) {
     slog('ws-abierto', { sala: roomName, peer: id, nombre: name, dispositivo: device, ua: req.headers['user-agent'] });
   }
   // Quien abre la sala en este mismo PC recibe el enlace de invitación ya copiado en el portapapeles.
-  const inviteCopied = room.peers.size === 1 && isLocalRequest(req) && publicUrl
+  // Solo al entrar, no en cada reconexión del canal: pisaría lo que haya copiado mientras tanto.
+  const inviteCopied = !existing && room.peers.size === 1 && isLocalRequest(req) && publicUrl
     ? copyToClipboard(inviteLink(roomName)) : false;
   send(peer, 'welcome', { id, room: roomName, peers: peerList(room).filter((p) => p.id !== id), session: room.session, inviteCopied, volvio });
   broadcast(room, 'peer-joined', { id, name: peer.name, device: peer.device, volvio }, id);
@@ -720,7 +780,21 @@ function inviteLink(room) {
   return `${publicUrl}/?sala=${encodeURIComponent(room)}&k=${encodeURIComponent(ACCESS_KEY)}`;
 }
 
+/*
+ * El puerto del propio PC no pide clave, así que solo vale si de verdad se abre como localhost: otra web abierta
+ * en el navegador del PC no debe poder mandarle órdenes (Origin distinto) ni llegar a él con un nombre de dominio
+ * que apunte a 127.0.0.1 (Host distinto).
+ */
+function esDeEstePc(req) {
+  const local = (h) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(h || '');
+  if (!local(req.headers.host)) return false;
+  const origen = req.headers.origin;
+  if (!origen) return true;
+  try { return local(new URL(origen).host); } catch { return false; }
+}
+
 function onRequest(req, res) {
+  if (!req.viaPublic && !esDeEstePc(req)) return forbidden(res, 'El estudio de este PC solo se abre como http://localhost.');
   handle(req, res).catch((err) => {
     if (!res.headersSent) json(res, err.status || 500, { error: err.message });
     else res.end();

@@ -154,3 +154,28 @@ test('micro: el aviso propio dice qué hacer; el del otro, de quién es', () => 
   assert.strictEqual(L.avisoDeMicro('bien'), '');
   assert.strictEqual(L.avisoDeMicro(null, { nombre: 'DJ' }), '');
 });
+
+test('problemaDeGrabacion: avisa si la cámara, el micro o un grabador se paran', () => {
+  const bien = {
+    iniciada: true, grabadores: [{ pista: 'camara', estado: 'recording' }, { pista: 'llamada', estado: 'recording' }],
+    camara: { estado: 'live', sinSenal: false }, micro: { estado: 'live' }, audio: 'running', discoLibre: 100 * 2 ** 30,
+  };
+  assert.strictEqual(L.problemaDeGrabacion(bien), '');
+  assert.match(L.problemaDeGrabacion({ ...bien, camara: { estado: 'ended' } }), /cámara se ha detenido/);
+  assert.match(L.problemaDeGrabacion({ ...bien, micro: { estado: 'ended' } }), /micrófono/);
+  assert.match(L.problemaDeGrabacion({ ...bien, grabadores: [{ pista: 'camara', estado: 'inactive' }] }), /dejado de grabarse/);
+  assert.match(L.problemaDeGrabacion({ ...bien, audio: 'suspended' }), /audio/);
+  assert.match(L.problemaDeGrabacion({ ...bien, camara: { estado: 'live', sinSenal: true } }), /no da imagen/);
+  assert.match(L.problemaDeGrabacion({ ...bien, discoLibre: 2 ** 30 }), /disco/);
+  // Durante la cuenta atrás los grabadores aún no han arrancado: no es un problema.
+  assert.strictEqual(L.problemaDeGrabacion({ ...bien, iniciada: false, grabadores: [{ pista: 'camara', estado: 'inactive' }] }), '');
+  // Sin dato del disco no se avisa.
+  assert.strictEqual(L.problemaDeGrabacion({ ...bien, discoLibre: null }), '');
+});
+
+test('avisoDeEspacio: solo avisa si falta sitio para un episodio', () => {
+  assert.strictEqual(L.avisoDeEspacio({ discoLibre: 200 * 2 ** 30, propio: { quota: 100 * 2 ** 30, usage: 0 } }), '');
+  assert.match(L.avisoDeEspacio({ discoLibre: 5 * 2 ** 30 }), /quedan 5,0 GB/);
+  assert.match(L.avisoDeEspacio({ discoLibre: null, propio: { quota: 12 * 2 ** 30, usage: 9 * 2 ** 30 } }), /poco sitio/);
+  assert.strictEqual(L.avisoDeEspacio({ discoLibre: null, propio: undefined }), '');
+});
