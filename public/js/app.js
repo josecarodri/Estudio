@@ -37,6 +37,8 @@
     wakeLock: null,
     recuperando: false,   // se entró para retomar una grabación tras una caída de la página
     corteAbierto: null,   // tramo «✂ cortar» abierto en la sala: { inicio (hora del servidor), nombre }
+    problema: '',         // lo que impide que la grabación de esta página esté saliendo bien (cámara parada…)
+    discoLibre: null,     // bytes libres en el disco del PC del estudio (lo dice el servidor)
   };
 
   // Marca en el navegador mientras se graba: si la página muere, al reabrir sigue ahí y permite retomar.
@@ -349,6 +351,8 @@
       state.publicUrl = cfg?.publicUrl || '';
       state.accessKey = cfg?.accessKey || '';
       state.hasTurn = !!cfg?.turn;
+      state.discoLibre = cfg?.discoLibre ?? null;
+      avisarEspacio();
       state.clock = await Clock.sample(12);
     } finally {
       $('#btnJoin').disabled = false;
@@ -379,6 +383,21 @@
   }
 
   /**
+   * Antes de grabar: que haya sitio. En el PC del estudio se guarda todo (unos 10 GB por episodio); en cada
+   * dispositivo, lo suyo hasta que se sube. Se pide además al navegador que no borre lo guardado si anda justo.
+   */
+  async function avisarEspacio() {
+    const gb = (n) => (n / 2 ** 30).toFixed(1);
+    try {
+      navigator.storage?.persist?.().catch(() => {});
+      const aviso = Llamada.avisoDeEspacio({ discoLibre: state.discoLibre, propio: await navigator.storage?.estimate?.() });
+      if (!aviso) return;
+      Registro.anotar('espacio-justo', { disco_gb: state.discoLibre == null ? undefined : gb(state.discoLibre), aviso });
+      toast(aviso, 'warn', 15000);
+    } catch { /* sin datos de espacio: no se avisa */ }
+  }
+
+  /**
    * Mira cómo está la grabación de la sala en el servidor y corrige esta página si se perdió una orden:
    * empieza (un tramo sin pitido) si hay una grabación en marcha y no graba, y para si sigue grabando una
    * sesión que ya terminó. Se deja tiempo a la orden normal, que llega con cuenta atrás y pitido.
@@ -388,9 +407,12 @@
     if (vigilando || state.rec?.stopping) return;
     vigilando = true;
     try {
-      const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/sesion`, { cache: 'no-store' });
+      // Si esta página graba, lo dice: un servidor que se reinició a media grabación la recupera así.
+      const grabo = state.rec && !state.rec.stopping ? `?grabo=${encodeURIComponent(state.rec.session.id)}` : '';
+      const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/sesion${grabo}`, { cache: 'no-store' });
       if (!r.ok) return;
-      const { session } = await r.json();
+      const { session, discoLibre } = await r.json();
+      state.discoLibre = discoLibre ?? null;
       aplicarMarcas(session);   // por si se perdió el aviso de un tramo ✂ abierto o cerrado
       const accion = Llamada.alRecibirGrabacion({ recuperando: false, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: session });
       if (accion === 'nada' || Llamada.esPronto({ accion, sesion: session, ahora: serverNow() })) return;
@@ -849,6 +871,7 @@
         r.recorder.start(1000);
         r.uploader.anotarInicio(r.startedAtServer);   // queda en el servidor aunque esta página muera
       }
+      rec.iniciada = true;
       setRecordingUi('recording');
       timerLoop();
     }, Math.max(0, wait));
@@ -899,16 +922,25 @@
       pcm.startedAtServer = pcm.session.startAt + (msg.time - pcm.startCtx) * 1000;
       pcm.uploader.anotarInicio(pcm.startedAtServer);
     } else if (msg.type === 'data') {
+      if (pcm.cerrado) return;
       pcm.parts.push(msg.samples);
       pcm.samples += msg.samples.length;
       if (pcm.samples >= state.ctx.sampleRate) flushPcm(pcm);   // ~1 s por trozo
     } else if (msg.type === 'stopped') {
-      flushPcm(pcm);
-      const endedAtServer = pcm.startedAtServer + (pcm.total / state.ctx.sampleRate) * 1000;
-      pcm.uploader.finish(finishInfo(pcm.startedAtServer, endedAtServer, pcm.session.beepAt, pcm.endBeepAt));
-      pcm.node.disconnect(); pcm.sink.disconnect();
-      try { state.audio.recBus.disconnect(pcm.node); } catch { /* ya desconectado */ }
+      cerrarPcm(pcm);
     }
+  }
+
+  /** Cierra el WAV: sube lo que quede y lo da por terminado. Una sola vez. */
+  function cerrarPcm(pcm) {
+    if (pcm.cerrado) return;
+    pcm.cerrado = true;
+    flushPcm(pcm);
+    const inicio = pcm.startedAtServer;
+    const endedAtServer = inicio == null ? null : inicio + (pcm.total / state.ctx.sampleRate) * 1000;
+    pcm.uploader.finish(finishInfo(inicio, endedAtServer, pcm.session.beepAt, pcm.endBeepAt));
+    pcm.node.disconnect(); pcm.sink.disconnect();
+    try { state.audio.recBus.disconnect(pcm.node); } catch { /* ya desconectado */ }
   }
 
   function flushPcm(pcm) {
@@ -953,6 +985,14 @@
       releaseWakeLock();
       setRecordingUi('idle');
       toast('Grabación terminada. Subiendo archivos…');
+      revisarGrabacion();
+      // Si el audio estaba detenido (en el iPad: una llamada, Siri…) el aviso de parada no llega nunca y el WAV
+      // se quedaba sin cerrar. Se le da un momento y se cierra con lo que haya.
+      setTimeout(() => {
+        if (rec.worklet.cerrado) return;
+        Registro.anotar('wav-cerrado-sin-aviso', { audio: state.ctx?.state });
+        cerrarPcm(rec.worklet);
+      }, 3000);
     }, Math.max(0, stopLocal - localNow()));
   }
 
@@ -1011,8 +1051,37 @@
     el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
   }
 
+  /**
+   * ¿La grabación de esta página está saliendo bien? Si la cámara, el micro o un grabador se paran, antes solo
+   * quedaba anotado en el registro: la página seguía diciendo «grabando» y se descubría al editar. Ahora se ve
+   * sobre la imagen propia y, por el estado, sobre la de esta persona en la otra página.
+   */
+  function revisarGrabacion() {
+    const rec = state.rec;
+    const v = state.localStream?.getVideoTracks()[0];
+    const a = state.localStream?.getAudioTracks()[0];
+    const problema = !rec || rec.stopping ? '' : Llamada.problemaDeGrabacion({
+      iniciada: !!rec.iniciada,
+      grabadores: rec.recorders.map((r) => ({ pista: r.info.kind, estado: r.recorder.state })),
+      camara: v ? { estado: v.readyState, sinSenal: v.muted } : null,
+      micro: a ? { estado: a.readyState } : null,
+      audio: state.ctx?.state,
+      discoLibre: state.discoLibre,
+    });
+    if (problema === state.problema) return;
+    state.problema = problema;
+    if (problema) Registro.anotar('grabacion-problema', { problema });
+    else Registro.anotar('grabacion-problema-resuelto', {});
+    const aviso = $('#recAviso');
+    aviso.textContent = problema ? `⚠ ${problema}` : '';
+    aviso.hidden = !problema;
+    if (problema) toast(`⚠ ${problema}`, 'error', 10000);
+    sendStatus();
+  }
+
   function timerLoop() {
     const rec = state.rec;
+    revisarGrabacion();
     if (!rec) { $('#timer').textContent = '00:00:00'; renderRemoteStatus(); renderMarcas(); return; }
     $('#timer').textContent = fmtTime(localNow() - rec.startLocal);
     renderRemoteStatus();
@@ -1124,7 +1193,7 @@
     if (!state.room) return;
     fetch(`/api/rooms/${encodeURIComponent(state.room)}/status`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec, uploads: uploadSummary(state.uploaders), mic: state.micEstado } }),
+      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec, uploads: uploadSummary(state.uploaders), mic: state.micEstado, problema: state.problema || undefined } }),
     }).catch(() => {});
   }
 
@@ -1137,9 +1206,11 @@
       msGrabando: state.rec ? localNow() - state.rec.startLocal : 0,
     });
     const rec = $('#remoteRec');
-    rec.hidden = !indicador;
-    rec.className = `rec-otro ${indicador || ''}`;
-    rec.textContent = indicador === 'graba' ? '● REC' : '⚠ NO ESTÁ GRABANDO';
+    // Si su página dice que algo de su grabación va mal (cámara parada…), eso manda sobre el «● REC».
+    const problema = st && typeof st.problema === 'string' ? st.problema.slice(0, 80) : '';
+    rec.hidden = !indicador && !problema;
+    rec.className = `rec-otro ${problema ? 'no-graba' : indicador || ''}`;
+    rec.textContent = problema ? `⚠ ${problema}` : indicador === 'graba' ? '● REC' : '⚠ NO ESTÁ GRABANDO';
     if (indicador === 'no-graba' && !renderRemoteStatus.avisado) {
       renderRemoteStatus.avisado = true;
       Registro.anotar('otro-no-graba', { nombre: state.remote?.name });

@@ -279,3 +279,67 @@ test('un session.json estropeado no deja sin lista al resto de grabaciones', asy
     server.closeAllConnections(); server.close();
   }
 });
+
+test('si el servidor se reinicia grabando, la sala recupera la grabación cuando una página dice que sigue', async () => {
+  const sesionDe = async (base, grabo) => (await fetch(`${base}/api/rooms/vuelve/sesion${grabo ? `?grabo=${grabo}` : ''}`)).json();
+  const a = await otroServidor();
+  let sesion;
+  try {
+    const g = await grabando(a.base, 'vuelve');
+    sesion = g.sesion;
+    await post(a.base, '/api/rooms/vuelve/marca', { tipo: 'corte', accion: 'abrir', from: 'aaa' });
+    g.ws.terminate();
+  } finally { a.parar(); }
+  const b = await otroServidor();
+  try {
+    // El servidor nuevo no sabe nada… y no se inventa una grabación por lo que haya en el disco.
+    assert.strictEqual((await sesionDe(b.base)).session, null);
+    // Una sesión que no existe no se recupera.
+    assert.strictEqual((await sesionDe(b.base, '2020-01-01_00-00-00')).session, null);
+    // La página que sigue grabando lo dice, y la sala vuelve a estar grabando (con su tramo ✂ abierto).
+    const r = await sesionDe(b.base, sesion);
+    assert.strictEqual(r.session.id, sesion);
+    assert.strictEqual(r.session.recording, true);
+    assert.ok(r.session.corteAbierto);
+    assert.ok(r.discoLibre === null || r.discoLibre > 0);
+    // Y se puede parar para los dos desde cualquiera.
+    assert.strictEqual((await post(b.base, '/api/rooms/vuelve/record', { action: 'stop', from: 'aaa' })).status, 200);
+  } finally { b.parar(); }
+  // Una sesión ya parada no se recupera.
+  const c = await otroServidor();
+  try {
+    assert.strictEqual((await sesionDe(c.base, sesion)).session, null);
+  } finally { c.parar(); }
+});
+
+test('el puerto del propio PC no atiende a otras webs ni a otros nombres de dominio', async () => {
+  const server = await listen();
+  const port = server.address().port;
+  const pedir = (headers, method = 'GET') => new Promise((resolve) => {
+    const req = http.request({ host: '127.0.0.1', port, method, path: '/api/time', headers }, (res) => { res.resume(); resolve(res.statusCode); });
+    req.end();
+  });
+  try {
+    assert.strictEqual(await pedir({}), 200);
+    assert.strictEqual(await pedir({ Host: `localhost:${port}`, Origin: `http://localhost:${port}` }), 200);
+    assert.strictEqual(await pedir({ Host: 'malo.example:8080' }), 403);                              // dominio que apunta a 127.0.0.1
+    assert.strictEqual(await pedir({ Origin: 'https://otra-web.example' }, 'POST'), 403);              // otra web abierta en el PC
+  } finally {
+    server.closeAllConnections(); server.close();
+  }
+});
+
+test('session.json se guarda entero: sin restos del archivo temporal', async () => {
+  const server = await listen();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { sesion, ws } = await grabando(base, 'entero');
+    await wav(base, 'entero', sesion);
+    const dir = path.join(process.env.GRABACIONES_DIR, 'entero', sesion);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')).id, sesion);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'session.json.tmp')), false);
+    ws.close();
+  } finally {
+    server.closeAllConnections(); server.close();
+  }
+});
