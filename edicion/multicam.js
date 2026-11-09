@@ -373,6 +373,7 @@ function buildRecipe(sesion) {
    * Un micro que empieza después del inicio del montaje (el tramo retomado) entra en su sitio.
    */
   const pistaDe = new Map();
+  const ultimoDe = new Map();
   const cronologicas = people.map((persona) => ({ persona, fuente: fuenteDeVoz(persona, probes) }))
     .filter((x) => x.fuente)
     .sort((a, b) => (offsets[a.fuente] || 0) - (offsets[b.fuente] || 0));
@@ -394,6 +395,16 @@ function buildRecipe(sesion) {
     };
     if (fuente !== persona.mic) pistaAudio.video = false; // de la cámara, solo el sonido
     if (ganancias[fuente]) pistaAudio.gain = ganancias[fuente];
+    /*
+     * Relevo del Estudio (un archivo se acercaba a los 4 GB): el tramo nuevo empieza en la misma muestra en que
+     * acaba el anterior. Al colocarlos, cada uno por su sincronía, pueden pisarse un frame o dos, y dos clips de
+     * la misma pista no pueden solaparse: el anterior se acorta hasta donde entra el siguiente.
+     */
+    const anterior = ultimoDe.get(quien);
+    if (anterior && anterior.at + anterior.duration > pistaAudio.at && pistaAudio.at > anterior.at) {
+      anterior.duration = pistaAudio.at - anterior.at;
+    }
+    ultimoDe.set(quien, pistaAudio);
     edit.push(pistaAudio);
   }
 

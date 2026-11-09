@@ -193,12 +193,14 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
 
 ## Resistencia a fallos
 
-- **Relevo antes de los 4 GB (Chrome y Edge).** El grabador MP4 de Chrome/Edge cierra la página de golpe cuando un
-  archivo llega a 4 GiB (a 1080p y 10 Mbps, hacia el minuto 57: era la caída «de la hora» del PC). Antes de llegar
-  (a los 3,6 GiB, unos 50 min) la página hace sola un relevo: cierra sus archivos y sigue en un tramo nuevo de la
-  misma grabación (`jc-2_…`, como una retomada, con `retomada: true`), en medio segundo, sin pitido y sin tocar la
-  llamada. Entre un tramo y otro quedan unos 0,5 s sin la cámara ni el micro de esa persona. A 720p (5 Mbps) el
-  relevo no llega hasta casi las dos horas. El iPad (Safari) no lo necesita. En el registro: `grabacion-relevo`.
+- **El límite de 4 GB de Chrome y Edge.** Su grabador MP4 cierra la página de golpe cuando un archivo llega a
+  4 GiB (a 10 Mbps, hacia el minuto 57: era la caída «de la hora» del PC). Dos defensas:
+  - En el PC, 1080p se graba a **6 Mbps** (el iPad sigue a 10): el archivo no llega al límite hasta pasados los
+    85 min, así que en una toma normal no pasa nada.
+  - Si aun así se acerca (3,8 GiB), la página hace sola un **relevo**: sigue en un tramo nuevo de la misma grabación
+    (`jc-2_…`, con `retomada: true`), sin pitido y sin tocar la llamada. **No se pierde sonido**: el WAV nuevo
+    empieza en la misma muestra en que acaba el anterior (en el registro, `relevo-sin-hueco`). En la imagen puede
+    faltar algún fotograma en el cambio. El iPad (Safari) no lo necesita.
 - **Avisos si la grabación va mal.** Si la cámara, el micro o un grabador se paran grabando, o el disco del PC se
   llena, se ve sobre la imagen propia y sobre la de esa persona en la otra página. Al entrar se avisa si falta
   sitio para un episodio (menos de 20 GB en el PC o de 10 GB en el dispositivo).

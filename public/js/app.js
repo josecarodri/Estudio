@@ -8,19 +8,22 @@
 
   const RESOLUTIONS = {
     '720': { width: 1280, height: 720, bitrate: 5_000_000 },
-    '1080': { width: 1920, height: 1080, bitrate: 10_000_000 },
+    '1080': { width: 1920, height: 1080, bitrate: 10_000_000, bitratePc: 6_000_000 },
     '2160': { width: 3840, height: 2160, bitrate: 35_000_000 },
   };
   /*
    * El grabador MP4 de Chrome y Edge cierra la página de golpe cuando un archivo llega a 4 GiB (comprobado en
-   * Chromium 153: a 10 Mbps son unos 57 min; fueron las caídas de JC a los 58:45 y 59:02). Antes de llegar, la
-   * página hace sola un relevo: cierra sus archivos y sigue en un tramo nuevo de la misma grabación (jc-2…),
-   * igual que una retomada pero en medio segundo y sin tocar la llamada. `?relevoMb=` es para probarlo.
+   * Chromium 153; fueron las caídas de JC a los 58:45 y 59:02, grabando a 10 Mbps). Dos defensas:
+   *  - En el PC, 1080p se graba a 6 Mbps (`bitratePc`): el archivo no llega al límite hasta pasados los 85 min.
+   *  - Si aun así se acerca (3,8 GiB), la página hace sola un relevo: sigue en un tramo nuevo de la misma grabación
+   *    (jc-2…), sin tocar la llamada y sin perder sonido (el micro pasa de un archivo al otro en la misma muestra).
+   * `?relevoMb=` es para probarlo.
    */
   const RELEVO_BYTES = (() => {
     const mb = Number(new URLSearchParams(location.search).get('relevoMb'));
-    return mb > 0 ? { limite: mb * 2 ** 20, forzado: true } : { limite: 3.6 * 2 ** 30, forzado: false };
+    return mb > 0 ? { limite: mb * 2 ** 20, forzado: true } : { limite: 3.8 * 2 ** 30, forzado: false };
   })();
+  const RELEVO_MARGEN_MS = 1000;   // tiempo para preparar el tramo nuevo antes del instante del cambio
   const BEEP_HZ = 1000;
   const BEEP_SEC = 0.25;
 
@@ -414,7 +417,7 @@
    */
   let vigilando = false;
   async function vigilarGrabacion() {
-    if (vigilando || state.relevando || state.rec?.stopping) return;
+    if (vigilando || state.rec?.stopping) return;
     vigilando = true;
     try {
       // Si esta página graba, lo dice: un servidor que se reinició a media grabación la recupera así.
@@ -537,7 +540,6 @@
       },
       'record-stop': (d) => {
         aplicarMarcas(d);
-        if (state.relevando) state.relevoParado = d;   // llegó en pleno relevo: el tramo nuevo se para en cuanto arranque
         stopRecording(d);
       },
       marca: (d) => {
@@ -581,7 +583,6 @@
     // Al (re)entrar se mira la grabación de la sala: si se perdió la orden de grabar o de parar, se corrige ya.
     const accion = Llamada.alRecibirGrabacion({ recuperando: state.recuperando, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: d.session });
     if (accion !== 'nada') Registro.anotar('grabacion-en-curso', { accion, sesion: d.session?.id });
-    if (state.relevando) return;   // en pleno relevo de archivos: lo corrige la comprobación de cada 5 s
     if (accion !== 'parar' || !state.rec?.stopping) aplicarGrabacion(accion, d.session);
   }
 
@@ -807,7 +808,7 @@
    * La sincronía con el resto sigue saliendo de la hora de inicio de cada pista y de la grabación de la llamada.
    */
   async function startRecording(sessionServidor, { tarde = false, retomada = false, relevo = null } = {}) {
-    if (state.rec) return;
+    if (state.rec && !relevo) return;   // en un relevo el tramo anterior sigue hasta el instante del cambio
     // Cada relevo es un tramo con identificador propio (el servidor le da archivos propios: jc-2, jc-3…).
     state.tramoId = relevo ? `${state.me.id}r${relevo.numero}` : state.me.id;
     // Se libera el espacio de grabaciones anteriores ya subidas, sin esperar a que termine: borrar varios GB
@@ -818,7 +819,7 @@
     state.uploaders = state.uploaders.filter((u) => !u.finished);
     for (const u of subidas) u.deleteLocal().catch(() => {});
 
-    const startLocal = tarde ? localNow() + 500 : sessionServidor.startAt - state.clock.offset;
+    const startLocal = relevo ? relevo.inicioLocal : tarde ? localNow() + 500 : sessionServidor.startAt - state.clock.offset;
     const beepLocal = tarde ? null : sessionServidor.beepAt - state.clock.offset;
     // Para este dispositivo la «hora de inicio programada» es la real; sin claqueta no hay pitido que medir.
     const session = tarde ? { ...sessionServidor, startAt: startLocal + state.clock.offset, beepAt: null } : sessionServidor;
@@ -847,7 +848,7 @@
     const vMime = pickMime('video');
     rec.recorders.push(makeRecorder(camStream, {
       ...base, kind: 'camara', mime: vMime, width: vs.width, height: vs.height, frameRate: vs.frameRate,
-    }, { videoBitsPerSecond: res.bitrate, audioBitsPerSecond: 256_000 }));
+    }, { videoBitsPerSecond: !isIOS && /mp4/i.test(vMime) && res.bitratePc ? res.bitratePc : res.bitrate, audioBitsPerSecond: 256_000 }));
 
     // 2) Audio WAV sin pérdida (con inicio exacto por muestra)
     const wav = new TrackUploader({ ...base, kind: 'audio', format: 'wav', mime: 'audio/wav', sampleRate: state.ctx.sampleRate, channels: 1 });
@@ -858,10 +859,15 @@
     const pcm = { node, sink, uploader: wav, parts: [], samples: 0, total: 0, startedAtServer: null, startCtx: 0, session };
     rec.worklet = pcm;
     node.port.onmessage = (e) => onPcmMessage(pcm, e.data);
+    // En un relevo el WAV nuevo empieza en la misma muestra en que acaba el anterior (el mismo instante del reloj
+    // de audio para los dos), y se le dice cuanto antes: si la orden llegara tarde, faltaría sonido.
+    if (relevo) { pcm.startCtx = relevo.inicioCtx; pcm.relevo = true; node.port.postMessage({ cmd: 'start', at: relevo.inicioCtx }); }
     await wav.start();
-    const startCtx = ctxTimeFor(startLocal);
-    pcm.startCtx = startCtx;
-    node.port.postMessage({ cmd: 'start', at: startCtx });
+    if (!relevo) {
+      const startCtx = ctxTimeFor(startLocal);
+      pcm.startCtx = startCtx;
+      node.port.postMessage({ cmd: 'start', at: startCtx });
+    }
 
     // 3) La llamada (las dos cámaras lado a lado + audio mezclado), como referencia
     if ($('#recordCall').checked) {
@@ -941,6 +947,9 @@
     if (msg.type === 'started') {
       // Mismo dominio de reloj que el pitido: el inicio exacto respecto a la hora programada.
       pcm.startedAtServer = pcm.session.startAt + (msg.time - pcm.startCtx) * 1000;
+      // En un relevo debe empezar justo donde se pidió; si no, entre los dos archivos falta ese sonido: que conste.
+      const tardeMs = (msg.time - pcm.startCtx) * 1000;
+      if (pcm.relevo) Registro.anotar(tardeMs > 0.5 ? 'relevo-con-hueco' : 'relevo-sin-hueco', { hueco_ms: Math.round(tardeMs * 10) / 10 });
       pcm.uploader.anotarInicio(pcm.startedAtServer);
     } else if (msg.type === 'data') {
       if (pcm.cerrado) return;
@@ -979,7 +988,7 @@
     pcm.uploader.push(new Blob([out.buffer], { type: 'application/octet-stream' }));
   }
 
-  function stopRecording(session, { relevo = false } = {}) {
+  function stopRecording(session, { relevo = null } = {}) {
     const rec = state.rec;
     if (!rec || rec.stopping) return;
     rec.stopping = true;
@@ -997,12 +1006,12 @@
     }
     for (const r of rec.recorders) r.endBeepAt = endBeepAt;
     rec.worklet.endBeepAt = endBeepAt;
-    rec.worklet.node.port.postMessage({ cmd: 'stop', at: ctxTimeFor(stopLocal) });
+    rec.worklet.node.port.postMessage({ cmd: 'stop', at: relevo ? relevo.inicioCtx : ctxTimeFor(stopLocal) });
     if (!relevo) setRecordingUi('stopping');
     setTimeout(() => {
       for (const r of rec.recorders) if (r.recorder.state !== 'inactive') { r.endedAtServer = serverNow(); r.recorder.stop(); }
       clearInterval(rec.canvasTimer);
-      state.rec = null;
+      if (state.rec === rec) state.rec = null;   // en un relevo ya manda el tramo nuevo
       if (!relevo) {
         releaseWakeLock();
         setRecordingUi('idle');
@@ -1027,38 +1036,26 @@
   }
 
   /**
-   * Relevo de archivos: se cierra el tramo en curso (sin pitido) y medio segundo después empieza otro de la misma
-   * grabación, como una retomada. La llamada no se toca y para la sala esta página no ha dejado de grabar. Entre un
-   * tramo y otro queda un hueco de alrededor de medio segundo (no se solapan: el editor no lo admite).
+   * Relevo de archivos: dentro de un segundo, el tramo en curso se cierra (sin pitido) y en ese mismo instante
+   * empieza otro de la misma grabación, como una retomada. El WAV nuevo empieza en la muestra en que acaba el
+   * anterior: no se pierde sonido ni se repite (no se solapan: el editor no lo admite). La llamada no se toca.
    */
   function relevarGrabacion() {
     const rec = state.rec;
     if (!tocaRelevo(rec)) return;
     state.relevando = true;
-    state.relevoParado = null;
     const numero = rec.relevos + 1;
+    const inicioLocal = localNow() + RELEVO_MARGEN_MS;
+    const relevo = { numero, inicioLocal, inicioCtx: ctxTimeFor(inicioLocal), inicioVisible: rec.inicioVisible };
     Registro.anotar('grabacion-relevo', { sesion: rec.session.id, tramo: numero + 1, mb: Math.round(Math.max(...rec.recorders.map((r) => r.uploader.bytesTotal)) / 2 ** 20) });
-    stopRecording({ ...rec.session, stopAt: serverNow(), endBeepAt: null }, { relevo: true });
-    const seguir = () => {
-      if (state.rec) { setTimeout(seguir, 20); return; }   // aún cerrando el tramo anterior
-      const parada = state.relevoParado;
-      if (parada) {
-        // Pidieron parar justo en el relevo: no se empieza otro tramo.
-        state.relevando = false;
-        marcarRecuperacion(null); releaseWakeLock(); setRecordingUi('idle');
-        toast('Grabación terminada. Subiendo archivos…');
-        return;
-      }
-      startRecording(rec.session, { tarde: true, retomada: true, relevo: { numero, inicioVisible: rec.inicioVisible } })
-        .catch((err) => {
-          console.error(err);
-          Registro.anotar('error', { mensaje: `relevo: ${err.message}` });
-          toast(`No se pudo seguir grabando: ${err.message}`, 'error', 15000);
-          setRecordingUi('idle');
-        })
-        .finally(() => { state.relevando = false; });
-    };
-    seguir();
+    stopRecording({ ...rec.session, stopAt: inicioLocal + state.clock.offset, endBeepAt: null }, { relevo });
+    startRecording(rec.session, { tarde: true, retomada: true, relevo })
+      .catch((err) => {
+        console.error(err);
+        Registro.anotar('error', { mensaje: `relevo: ${err.message}` });
+        toast(`No se pudo seguir grabando: ${err.message}`, 'error', 15000);
+      })
+      .finally(() => { state.relevando = false; });
   }
 
   function drawComposite(c, canvas) {
@@ -1147,16 +1144,13 @@
   function timerLoop() {
     const rec = state.rec;
     revisarGrabacion();
-    if (!rec) {
-      // Entre dos tramos de un relevo no se pone a cero: el tramo nuevo arranca su propio cronómetro.
-      if (!state.relevando) $('#timer').textContent = '00:00:00';
-      renderRemoteStatus(); renderMarcas(); return;
-    }
+    clearTimeout(timerLoop.t);   // uno solo, aunque lo arranquen dos tramos seguidos (relevo)
+    if (!rec) { $('#timer').textContent = '00:00:00'; renderRemoteStatus(); renderMarcas(); return; }
     if (tocaRelevo(rec)) relevarGrabacion();
     $('#timer').textContent = fmtTime(localNow() - rec.inicioVisible);
     renderRemoteStatus();
     renderMarcas();
-    setTimeout(timerLoop, 250);
+    timerLoop.t = setTimeout(timerLoop, 250);
   }
 
   // ------------------------------------------------------------------ marcas en vivo
@@ -1263,7 +1257,7 @@
     if (!state.room) return;
     fetch(`/api/rooms/${encodeURIComponent(state.room)}/status`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec || !!state.relevando, uploads: uploadSummary(state.uploaders), mic: state.micEstado, problema: state.problema || undefined } }),
+      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec, uploads: uploadSummary(state.uploaders), mic: state.micEstado, problema: state.problema || undefined } }),
     }).catch(() => {});
   }
 
