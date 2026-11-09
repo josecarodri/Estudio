@@ -193,6 +193,18 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
 
 ## Resistencia a fallos
 
+- **Relevo antes de los 4 GB (Chrome y Edge).** El grabador MP4 de Chrome/Edge cierra la página de golpe cuando un
+  archivo llega a 4 GiB (a 1080p y 10 Mbps, hacia el minuto 57: era la caída «de la hora» del PC). Antes de llegar
+  (a los 3,6 GiB, unos 50 min) la página hace sola un relevo: cierra sus archivos y sigue en un tramo nuevo de la
+  misma grabación (`jc-2_…`, como una retomada, con `retomada: true`), en medio segundo, sin pitido y sin tocar la
+  llamada. Entre un tramo y otro quedan unos 0,5 s sin la cámara ni el micro de esa persona. A 720p (5 Mbps) el
+  relevo no llega hasta casi las dos horas. El iPad (Safari) no lo necesita. En el registro: `grabacion-relevo`.
+- **Avisos si la grabación va mal.** Si la cámara, el micro o un grabador se paran grabando, o el disco del PC se
+  llena, se ve sobre la imagen propia y sobre la de esa persona en la otra página. Al entrar se avisa si falta
+  sitio para un episodio (menos de 20 GB en el PC o de 10 GB en el dispositivo).
+- **Reinicio del servidor grabando.** Las páginas siguen grabando; en cuanto una dice que sigue (cada 5 s), la sala
+  recupera la grabación: marcas, Detener para los dos y retomada funcionan como antes del reinicio.
+
 - Cada segundo de grabación se guarda primero **en el propio dispositivo** (IndexedDB) y después se sube en orden.
   Si internet se corta, la grabación continúa y la subida se reanuda sola al volver la conexión.
 - Si se cae la conexión con la sala (un parpadeo del wifi, de la red del iPad o del túnel), la otra persona **no cuelga

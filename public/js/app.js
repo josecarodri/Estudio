@@ -11,6 +11,16 @@
     '1080': { width: 1920, height: 1080, bitrate: 10_000_000 },
     '2160': { width: 3840, height: 2160, bitrate: 35_000_000 },
   };
+  /*
+   * El grabador MP4 de Chrome y Edge cierra la página de golpe cuando un archivo llega a 4 GiB (comprobado en
+   * Chromium 153: a 10 Mbps son unos 57 min; fueron las caídas de JC a los 58:45 y 59:02). Antes de llegar, la
+   * página hace sola un relevo: cierra sus archivos y sigue en un tramo nuevo de la misma grabación (jc-2…),
+   * igual que una retomada pero en medio segundo y sin tocar la llamada. `?relevoMb=` es para probarlo.
+   */
+  const RELEVO_BYTES = (() => {
+    const mb = Number(new URLSearchParams(location.search).get('relevoMb'));
+    return mb > 0 ? { limite: mb * 2 ** 20, forzado: true } : { limite: 3.6 * 2 ** 30, forzado: false };
+  })();
   const BEEP_HZ = 1000;
   const BEEP_SEC = 0.25;
 
@@ -404,7 +414,7 @@
    */
   let vigilando = false;
   async function vigilarGrabacion() {
-    if (vigilando || state.rec?.stopping) return;
+    if (vigilando || state.relevando || state.rec?.stopping) return;
     vigilando = true;
     try {
       // Si esta página graba, lo dice: un servidor que se reinició a media grabación la recupera así.
@@ -525,10 +535,14 @@
         if (state.rec && state.rec.session.id !== d.id) { aplicarGrabacion('cambiar', d); return; }
         startRecording(d).catch((err) => { console.error(err); toast(`Error al grabar: ${err.message}`, 'error'); });
       },
-      'record-stop': (d) => { aplicarMarcas(d); stopRecording(d); },
+      'record-stop': (d) => {
+        aplicarMarcas(d);
+        if (state.relevando) state.relevoParado = d;   // llegó en pleno relevo: el tramo nuevo se para en cuanto arranque
+        stopRecording(d);
+      },
       marca: (d) => {
         aplicarMarcas(d.session);
-        if (d.de === state.me.id) return;   // quien la puso ya vio su aviso
+        if (d.de === state.me.id || d.de === state.tramoId) return;   // quien la puso ya vio su aviso
         const aviso = Llamada.avisoDeMarca(d.marca, { propia: false });
         if (aviso) toast(aviso.texto, aviso.tipo);
       },
@@ -567,6 +581,7 @@
     // Al (re)entrar se mira la grabación de la sala: si se perdió la orden de grabar o de parar, se corrige ya.
     const accion = Llamada.alRecibirGrabacion({ recuperando: state.recuperando, grabando: !!state.rec, miSesion: state.rec?.session.id, sesion: d.session });
     if (accion !== 'nada') Registro.anotar('grabacion-en-curso', { accion, sesion: d.session?.id });
+    if (state.relevando) return;   // en pleno relevo de archivos: lo corrige la comprobación de cada 5 s
     if (accion !== 'parar' || !state.rec?.stopping) aplicarGrabacion(accion, d.session);
   }
 
@@ -791,8 +806,10 @@
    * como un tramo nuevo de la misma sesión. `retomada` dice que viene de una caída de la página.
    * La sincronía con el resto sigue saliendo de la hora de inicio de cada pista y de la grabación de la llamada.
    */
-  async function startRecording(sessionServidor, { tarde = false, retomada = false } = {}) {
+  async function startRecording(sessionServidor, { tarde = false, retomada = false, relevo = null } = {}) {
     if (state.rec) return;
+    // Cada relevo es un tramo con identificador propio (el servidor le da archivos propios: jc-2, jc-3…).
+    state.tramoId = relevo ? `${state.me.id}r${relevo.numero}` : state.me.id;
     // Se libera el espacio de grabaciones anteriores ya subidas, sin esperar a que termine: borrar varios GB
     // tarda, y esperando aquí la segunda toma empezaba tarde (podía perderse el pitido) y, como `state.rec`
     // aún no estaba puesto, otra orden (la comprobación de cada 5 s, una reconexión) arrancaba otra grabación
@@ -808,18 +825,22 @@
     const res = RESOLUTIONS[$('#resolution').value] || RESOLUTIONS['1080'];
     const vs = state.localStream.getVideoTracks()[0].getSettings();
     const base = {
-      room: state.room, session: session.id, participant: state.me.id, name: state.me.name, device: state.me.device,
+      room: state.room, session: session.id, participant: state.tramoId, name: state.me.name, device: state.me.device,
       ...(retomada ? { retomada: true } : tarde ? { tarde: true } : {}),
     };
-    const rec = { session, startLocal, recorders: [], worklet: null, canvasTimer: null, stopping: false, tarde };
+    const rec = {
+      session, startLocal, recorders: [], worklet: null, canvasTimer: null, stopping: false, tarde,
+      // Tras un relevo el cronómetro sigue contando desde el principio de la grabación.
+      inicioVisible: relevo ? relevo.inicioVisible : startLocal, relevos: relevo ? relevo.numero : 0,
+    };
     state.rec = rec;
     // Marca de recuperación: si esta página muere grabando, la siguiente podrá ofrecer retomar.
     const marca = () => marcarRecuperacion({ grabando: true, sala: state.room, nombre: state.me.name, sesion: session.id });
     marca();
     rec.marcaTimer = setInterval(marca, 5000);
-    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate, tarde, retomada });
+    Registro.anotar('grabacion-inicio', { sesion: session.id, resolucion: `${vs.width}x${vs.height}`, fps: vs.frameRate, tarde, retomada, relevo: relevo ? relevo.numero : undefined });
     requestWakeLock();
-    setRecordingUi('armed');
+    if (!relevo) setRecordingUi('armed');
 
     // 1) Cámara + micrófono en alta calidad
     const camStream = new MediaStream([state.localStream.getVideoTracks()[0], state.audio.recDest.stream.getAudioTracks()[0]]);
@@ -958,14 +979,14 @@
     pcm.uploader.push(new Blob([out.buffer], { type: 'application/octet-stream' }));
   }
 
-  function stopRecording(session) {
+  function stopRecording(session, { relevo = false } = {}) {
     const rec = state.rec;
     if (!rec || rec.stopping) return;
     rec.stopping = true;
-    // Una parada normal no debe dejar marca de «se cerró grabando».
+    // Una parada normal no debe dejar marca de «se cerró grabando» (en un relevo se sigue grabando: se queda).
     clearInterval(rec.marcaTimer);
-    marcarRecuperacion(null);
-    Registro.anotar('grabacion-fin', { sesion: session.id });
+    if (!relevo) marcarRecuperacion(null);
+    Registro.anotar(relevo ? 'tramo-fin' : 'grabacion-fin', { sesion: session.id });
     const stopLocal = (session.stopAt || serverNow()) - state.clock.offset;
     // Pitido final: con el inicial permite medir y corregir la deriva entre los relojes de los dispositivos.
     const endBeepLocal = session.endBeepAt ? session.endBeepAt - state.clock.offset : null;
@@ -977,15 +998,17 @@
     for (const r of rec.recorders) r.endBeepAt = endBeepAt;
     rec.worklet.endBeepAt = endBeepAt;
     rec.worklet.node.port.postMessage({ cmd: 'stop', at: ctxTimeFor(stopLocal) });
-    setRecordingUi('stopping');
+    if (!relevo) setRecordingUi('stopping');
     setTimeout(() => {
       for (const r of rec.recorders) if (r.recorder.state !== 'inactive') { r.endedAtServer = serverNow(); r.recorder.stop(); }
       clearInterval(rec.canvasTimer);
       state.rec = null;
-      releaseWakeLock();
-      setRecordingUi('idle');
-      toast('Grabación terminada. Subiendo archivos…');
-      revisarGrabacion();
+      if (!relevo) {
+        releaseWakeLock();
+        setRecordingUi('idle');
+        toast('Grabación terminada. Subiendo archivos…');
+        revisarGrabacion();
+      }
       // Si el audio estaba detenido (en el iPad: una llamada, Siri…) el aviso de parada no llega nunca y el WAV
       // se quedaba sin cerrar. Se le da un momento y se cierra con lo que haya.
       setTimeout(() => {
@@ -994,6 +1017,48 @@
         cerrarPcm(rec.worklet);
       }, 3000);
     }, Math.max(0, stopLocal - localNow()));
+  }
+
+  /** ¿Algún archivo de esta página se acerca al tamaño con el que el grabador MP4 de Chrome/Edge cierra la página? */
+  function tocaRelevo(rec) {
+    if (!rec || !rec.iniciada || rec.stopping || state.relevando) return false;
+    return rec.recorders.some((r) => r.uploader.bytesTotal >= RELEVO_BYTES.limite
+      && (RELEVO_BYTES.forzado || (!isIOS && /mp4/i.test(r.recorder.mimeType || r.info.mime || ''))));
+  }
+
+  /**
+   * Relevo de archivos: se cierra el tramo en curso (sin pitido) y medio segundo después empieza otro de la misma
+   * grabación, como una retomada. La llamada no se toca y para la sala esta página no ha dejado de grabar. Entre un
+   * tramo y otro queda un hueco de alrededor de medio segundo (no se solapan: el editor no lo admite).
+   */
+  function relevarGrabacion() {
+    const rec = state.rec;
+    if (!tocaRelevo(rec)) return;
+    state.relevando = true;
+    state.relevoParado = null;
+    const numero = rec.relevos + 1;
+    Registro.anotar('grabacion-relevo', { sesion: rec.session.id, tramo: numero + 1, mb: Math.round(Math.max(...rec.recorders.map((r) => r.uploader.bytesTotal)) / 2 ** 20) });
+    stopRecording({ ...rec.session, stopAt: serverNow(), endBeepAt: null }, { relevo: true });
+    const seguir = () => {
+      if (state.rec) { setTimeout(seguir, 20); return; }   // aún cerrando el tramo anterior
+      const parada = state.relevoParado;
+      if (parada) {
+        // Pidieron parar justo en el relevo: no se empieza otro tramo.
+        state.relevando = false;
+        marcarRecuperacion(null); releaseWakeLock(); setRecordingUi('idle');
+        toast('Grabación terminada. Subiendo archivos…');
+        return;
+      }
+      startRecording(rec.session, { tarde: true, retomada: true, relevo: { numero, inicioVisible: rec.inicioVisible } })
+        .catch((err) => {
+          console.error(err);
+          Registro.anotar('error', { mensaje: `relevo: ${err.message}` });
+          toast(`No se pudo seguir grabando: ${err.message}`, 'error', 15000);
+          setRecordingUi('idle');
+        })
+        .finally(() => { state.relevando = false; });
+    };
+    seguir();
   }
 
   function drawComposite(c, canvas) {
@@ -1082,8 +1147,13 @@
   function timerLoop() {
     const rec = state.rec;
     revisarGrabacion();
-    if (!rec) { $('#timer').textContent = '00:00:00'; renderRemoteStatus(); renderMarcas(); return; }
-    $('#timer').textContent = fmtTime(localNow() - rec.startLocal);
+    if (!rec) {
+      // Entre dos tramos de un relevo no se pone a cero: el tramo nuevo arranca su propio cronómetro.
+      if (!state.relevando) $('#timer').textContent = '00:00:00';
+      renderRemoteStatus(); renderMarcas(); return;
+    }
+    if (tocaRelevo(rec)) relevarGrabacion();
+    $('#timer').textContent = fmtTime(localNow() - rec.inicioVisible);
     renderRemoteStatus();
     renderMarcas();
     setTimeout(timerLoop, 250);
@@ -1095,7 +1165,7 @@
   // propuestas de corte y en guías del proyecto. En el PC, también con las teclas C y B.
   async function marcar(tipo) {
     if (!state.rec || state.rec.stopping) return;
-    const cuerpo = { tipo, from: state.me.id, hora: serverNow() };
+    const cuerpo = { tipo, from: state.tramoId || state.me.id, hora: serverNow() };
     if (tipo === 'corte') cuerpo.accion = state.corteAbierto ? 'cerrar' : 'abrir';
     try {
       const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/marca`, {
@@ -1193,7 +1263,7 @@
     if (!state.room) return;
     fetch(`/api/rooms/${encodeURIComponent(state.room)}/status`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec, uploads: uploadSummary(state.uploaders), mic: state.micEstado, problema: state.problema || undefined } }),
+      body: JSON.stringify({ from: state.me.id, status: { recording: !!state.rec || !!state.relevando, uploads: uploadSummary(state.uploaders), mic: state.micEstado, problema: state.problema || undefined } }),
     }).catch(() => {});
   }
 
