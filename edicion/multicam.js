@@ -365,9 +365,47 @@ function buildRecipe(sesion) {
     edit.push(corte);
   }
 
+  const duracionTotal = aFrames((sesion.toBin || 0) - inicioTimeline);
+
+  /*
+   * Huecos sin plano: la cámara de quien habla aún no ha empezado o ya se acabó. Pasa al caerse una página
+   * (2026-11-08): su cámara acaba unos segundos antes que su micro, y esos segundos salían en negro. Se cubren
+   * con otra cámara que sí tenga imagen ahí, la que llegue más lejos.
+   */
+  const camaras = people.filter((p) => p.cam).map((p) => {
+    const inicio = Math.round(((offsets[p.cam] || 0) - inicioTimeline / binHz) * fps);
+    const total = framesDisponibles(p.cam);
+    return { cam: p.cam, inicio, fin: total === null ? Infinity : inicio + total };
+  });
+  const huecos = [];
+  let cursor = 0;
+  for (const c of edit.slice().sort((a, b) => a.at - b.at)) {
+    if (c.at > cursor) huecos.push([cursor, c.at]);
+    cursor = Math.max(cursor, c.at + c.duration);
+  }
+  if (duracionTotal > cursor) huecos.push([cursor, duracionTotal]);
+  for (const [a, b] of huecos) {
+    let pos = a;
+    while (pos < b) {
+      const validas = camaras.filter((c) => c.inicio <= pos && c.fin > pos);
+      if (!validas.length) {
+        const siguiente = Math.min(...camaras.map((c) => c.inicio).filter((x) => x > pos));
+        if (!(siguiente < b)) break;
+        pos = siguiente;
+        continue;
+      }
+      const elegida = validas.reduce((m, c) => (Math.min(c.fin, b) > Math.min(m.fin, b) ? c : m));
+      const hasta = Math.min(elegida.fin, b);
+      const corte = { clip: idPorArchivo.get(elegida.cam), in: pos - elegida.inicio, duration: hasta - pos, at: pos, audio: false };
+      if (colores[elegida.cam]) Object.assign(corte, colores[elegida.cam]);
+      edit.push(corte);
+      pos = hasta;
+    }
+  }
+  edit.sort((a, b) => a.at - b.at);
+
   // Audio: cada micro entero y continuo, en su propia pista. Si de alguien no llegó el micro (su WAV), va el
   // sonido de su cámara, también entero: si no, esa persona se quedaría muda en el montaje.
-  const duracionTotal = aFrames((sesion.toBin || 0) - inicioTimeline);
   /*
    * Los tramos de una misma persona (jc y su retomado jc-2) comparten pista: no se solapan.
    * Un micro que empieza después del inicio del montaje (el tramo retomado) entra en su sitio.

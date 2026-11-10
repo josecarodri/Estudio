@@ -732,6 +732,25 @@ test('los planos nunca se pisan, caigan donde caigan los turnos', () => {
   }
 });
 
+test('buildRecipe: donde la cámara de quien habla ya se acabó, va otra cámara (no negro)', () => {
+  // jc se cayó: su cámara acaba en el segundo 8 pero su micro (y su turno) siguen hasta el 10.
+  const binHz = 100;
+  const recipe = MC.buildRecipe({
+    people: [{ id: 'dj', cam: '/v/dj_camara.mp4' }, { id: 'jc', cam: '/v/jc_camara.mp4' }],
+    offsets: { '/v/dj_camara.mp4': 0, '/v/jc_camara.mp4': 0 },
+    probes: { '/v/jc_camara.mp4': { seconds: 8 } },
+    turns: [{ startBin: 0, endBin: 4 * binHz, id: 'dj' }, { startBin: 4 * binHz, endBin: 10 * binHz, id: 'jc' }],
+    fps: 25, binHz, fromBin: 0, toBin: 10 * binHz,
+  });
+  assert.deepEqual(R.validate(recipe).errors, []);
+  const video = recipe.edit.filter((c) => c.audio === false);
+  assert.deepEqual(video.map((c) => [c.clip, c.at, c.duration, c.in]), [
+    ['cam_dj', 0, 100, 0],
+    ['cam_jc', 100, 100, 100],
+    ['cam_dj', 200, 50, 200],   // los 2 s sin imagen de jc, con la cámara de dj en sincronía
+  ]);
+});
+
 test('buildRecipe pone una guía por plano', () => {
   const binHz = 100;
   const recipe = MC.buildRecipe({
