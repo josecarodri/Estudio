@@ -327,7 +327,19 @@ Además, buscando calidad y tiempo:
   2 pruebas que fallaban; la de color fallaba porque sus dos vídeos de partida ya no tenían los mismos píxeles (con
   los mismos píxeles, el filtro da lo mismo con y sin etiqueta: el color está bien). 318 pruebas, 0 fallos.
 
+## Episodio del 2026-11-08: caídas por los 4 GB y negro sin cámara (2026-11-08)
+- **Las caídas «a la hora» son el límite de 4 GB de Edge**: la página de JC se cerró dos veces, cada una a ~58:45 de
+  grabar su tramo, con `jc_camara.mp4` en 4 291 MB y `jc-2_camara.mp4` en 4 294 MB (2³² = 4 295 MB). La del iPad de DJ
+  pasó de 8,8 GB sin problema. La del 2026-11-01 (a los 59:02) fue casi seguro lo mismo. Arreglo pendiente en el
+  Estudio (ver Pendiente). Lo de después de cada caída llegó entero; solo se pierden 1–2 s.
+- **Negro de ~2 s antes de una caída**: la cámara de JC acaba unos segundos antes que su micro, el turno seguía siendo
+  suyo y `buildRecipe` recortaba el plano a lo que hay sin poner nada en su lugar. Ahora cubre todo hueco sin plano
+  con la cámara que tenga imagen ahí (también los 0,2 s del principio). Hace falta `--rehacer` para que un reparto
+  ya hecho lo coja (la huella no mira el código).
+
 ## Pendiente
+0. **Estudio: que la cámara del PC no pase de 4 GB** (empezar un archivo nuevo antes, sin hueco, o bajar el bitrate).
+   Mientras tanto, cada ~59 min de grabación se cae la página de JC.
 1. Primer caso real de caída (2026-10-18): que Jose revise en la revisión el empalme jc → jc-2 y el labial de jc-2.
 2. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
    falta: con 0 se ve y se oye bien.
