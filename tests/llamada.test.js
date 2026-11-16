@@ -154,3 +154,30 @@ test('micro: el aviso propio dice qué hacer; el del otro, de quién es', () => 
   assert.strictEqual(L.avisoDeMicro('bien'), '');
   assert.strictEqual(L.avisoDeMicro(null, { nombre: 'DJ' }), '');
 });
+
+test('vigilancia de la llamada: se rehace si lleva el plazo sin conectar, pero no sin sala ni con el otro ausente', () => {
+  const base = { msSinConectar: 25000, esperaMs: 20000, otroAusente: false, salaConectada: true };
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'connected' }), 'bien');
+  // La oferta se perdió: las dos páginas se quedan en «new» para siempre si nadie hace nada.
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'new' }), 'rehacer');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'connecting' }), 'rehacer');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'failed' }), 'rehacer');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'disconnected', msSinConectar: 8000 }), 'esperar', 'un corte breve se recupera solo');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'failed', otroAusente: true }), 'esperar');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'failed', salaConectada: false }), 'esperar');
+  // Tras un intento fallido se espera más (lo dobla quien llama).
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'connecting', esperaMs: 40000 }), 'esperar');
+});
+
+test('límite de 4 GB del MP4 en Edge/Chrome: se avisa con tiempo, y no en el iPad ni grabando en WebM', () => {
+  const GB = 2 ** 30;
+  const base = { mp4: true, chromium: true, segundos: 47 * 60 };
+  assert.strictEqual(L.avisoDeLimite({ ...base, bytes: 3 * GB }), '', 'a 3 GB aún no');
+  const aviso = L.avisoDeLimite({ ...base, bytes: 3.4 * GB });
+  assert.match(aviso, /lleva 3,4 GB/);
+  assert.match(aviso, /quedan unos 8 min/);
+  assert.match(aviso, /Detener y vuelvan a Grabar/);
+  assert.strictEqual(L.avisoDeLimite({ ...base, bytes: 3.9 * GB, chromium: false }), '', 'Safari (el iPad) no tiene ese límite');
+  assert.strictEqual(L.avisoDeLimite({ ...base, bytes: 3.9 * GB, mp4: false }), '');
+  assert.match(L.avisoDeLimite({ mp4: true, chromium: true, bytes: 3.9 * GB, segundos: 0 }), /4 GB\. Cuando/, 'sin ritmo no se dice cuánto queda');
+});

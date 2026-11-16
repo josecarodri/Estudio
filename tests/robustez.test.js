@@ -244,3 +244,57 @@ test('un trozo que no se pudo apuntar no se confirma: el reintento lo guarda y s
     assert.strictEqual(datos[44 + 9600], 2);
   } finally { b.parar(); }
 });
+
+test('si el servidor se reinicia en plena grabación, la sala la recupera: se puede marcar y parar para los dos', async () => {
+  const a = await otroServidor();
+  let sesion;
+  try {
+    const g = await grabando(a.base, 'recupera');
+    sesion = g.sesion;
+    await wav(a.base, 'recupera', sesion);
+    await envioLento(a.port, 'recupera', sesion, 0, Buffer.alloc(9600, 1), 1);
+    await post(a.base, '/api/rooms/recupera/marca', { tipo: 'corte', accion: 'abrir', from: 'aaa' });
+    g.ws.close();
+  } finally { a.parar(); }
+  const b = await otroServidor();
+  try {
+    const estado = await fetch(`${b.base}/api/rooms/recupera/sesion`).then((r) => r.json());
+    assert.strictEqual(estado.session.id, sesion);
+    assert.strictEqual(estado.session.recording, true, 'sigue en marcha tras el reinicio');
+    assert.ok(estado.session.corteAbierto, 'y el tramo ✂ que estaba abierto sigue abierto');
+    const marca = await post(b.base, '/api/rooms/recupera/marca', { tipo: 'bueno', from: 'aaa' });
+    assert.strictEqual(marca.status, 200);
+    const stop = await post(b.base, '/api/rooms/recupera/record', { action: 'stop', from: 'aaa' });
+    assert.strictEqual(stop.status, 200);
+    const guardada = JSON.parse(fs.readFileSync(path.join(process.env.GRABACIONES_DIR, 'recupera', sesion, 'session.json'), 'utf8'));
+    assert.ok(guardada.stopAt, 'la parada queda apuntada');
+    assert.ok(guardada.marcas.find((m) => m.tipo === 'corte').cerradoAlParar);
+  } finally { b.parar(); }
+  // Ya parada, otro reinicio no la da por en marcha.
+  const c = await otroServidor();
+  try {
+    const estado = await fetch(`${c.base}/api/rooms/recupera/sesion`).then((r) => r.json());
+    assert.strictEqual(estado.session, null);
+  } finally { c.parar(); }
+});
+
+test('una grabación abandonada hace rato no se recupera, y un session.json ilegible no tumba la lista', async () => {
+  const dir = path.join(process.env.GRABACIONES_DIR, 'vieja', '2026-01-01_10-00-00');
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, 'session.json');
+  fs.writeFileSync(f, JSON.stringify({ room: 'vieja', id: '2026-01-01_10-00-00', startAt: 1, beepAt: 2, participants: {}, tracks: {} }));
+  const hace = new Date(Date.now() - 3600 * 1000);
+  fs.utimesSync(f, hace, hace);
+  const rota = path.join(process.env.GRABACIONES_DIR, 'rota', '2026-01-02_10-00-00');
+  fs.mkdirSync(rota, { recursive: true });
+  fs.writeFileSync(path.join(rota, 'session.json'), '{ "room": "rota", "id": ');
+  const s = await otroServidor();
+  try {
+    const estado = await fetch(`${s.base}/api/rooms/vieja/sesion`).then((r) => r.json());
+    assert.strictEqual(estado.session, null);
+    const lista = await fetch(`${s.base}/api/sessions`);
+    assert.strictEqual(lista.status, 200);
+    const ids = (await lista.json()).map((x) => x.id);
+    assert.ok(ids.includes('2026-01-01_10-00-00') && !ids.includes('2026-01-02_10-00-00'));
+  } finally { s.parar(); }
+});

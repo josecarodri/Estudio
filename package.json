@@ -5,7 +5,6 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "alinear": "node tools/alinear.js",
     "test": "node --test tests/*.test.js edicion/tests/*.test.js",
     "test:grabacion": "node --test tests/*.test.js",
     "test:edicion": "node --test edicion/tests/*.test.js",

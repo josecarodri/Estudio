@@ -66,17 +66,7 @@ Aunque estéis en la misma casa, se usa siempre este enlace por internet (ya no 
 En la carpeta **`grabaciones`** del Estudio, una subcarpeta por sala y otra por cada grabación (fecha y hora).
 También puedes verlas y descargarlas desde el enlace **Grabaciones** (arriba a la derecha en el estudio).
 
-## 6. (Opcional) Alinear automáticamente para el editor
-
-1. Instala **ffmpeg** una vez: abre **PowerShell** y escribe `winget install Gyan.FFmpeg` (acepta con `Y`).
-   Cierra PowerShell cuando termine.
-2. Doble clic en **`Alinear grabaciones (Windows).bat`**. Crea en cada grabación una carpeta **`alineados`** con los
-   archivos ya sincronizados (MP4 a 30 fps y WAV), listos para Premiere, DaVinci Resolve, etc.
-   Si grabasteis dos personas, también crea **`lado_a_lado.mp4`**: las dos cámaras juntas, una al lado de la otra
-   (sin audio; el sonido va en los WAV). Úsalo como tercera cámara en el editor para los momentos de conversación
-   rápida.
-
-## 7. (Recomendado) Servidor TURN para que la llamada conecte siempre
+## 6. (Recomendado) Servidor TURN para que la llamada conecte siempre
 
 Si alguna vez el estudio avisa de que **la llamada no conecta** (pasa con algunas redes de móvil, empresa o
 universidad), la grabación sigue funcionando pero no os veis. Para evitarlo:
@@ -113,7 +103,7 @@ Si usas otro servidor TURN (coturn propio, Metered, Twilio…), en su lugar pon 
 `TURN_USER=…` y `TURN_PASS=…`.
 </details>
 
-## 8. (Opcional) Enlace fijo con Tailscale Funnel
+## 7. (Opcional) Enlace fijo con Tailscale Funnel
 
 Con Cloudflare el enlace cambia cada vez. Con **Tailscale Funnel** es **siempre el mismo**
 (`https://<tu-pc>.<tu-red>.ts.net/?sala=…&k=…`), así que la otra persona puede guardarlo en la pantalla de inicio de

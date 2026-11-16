@@ -154,65 +154,6 @@ node cli.js multicam ... --audio-offset -33
 **Negativo adelanta el audio** (úsalo si va atrasado), positivo lo atrasa. El sentido
 está calibrado contra un archivo con 100 ms de retardo metidos a propósito, no deducido.
 
-### De dónde sale ese retardo, y cómo medirlo en vez de buscarlo
-
-Si la grabación se hizo con una claqueta digital (un pitido inyectado en el bus de
-audio, como hace el Estudio, la parte de grabación de este repo), ese pitido alinea el audio de todos con
-mucha precisión, pero **no dice nada del vídeo**: se genera dentro del grafo de audio,
-mientras que la cámara se captura por otro camino con su propia latencia. Las dos pistas
-quedan desplazadas a la vez, así que comparar archivos entre sí no lo detecta.
-
-Para verlo hace falta un suceso que esté en la imagen y en el sonido a la vez. El
-Estudio ya lo graba: además del pitido, **destella la pantalla**, y esa luz
-en la cara sí queda en el vídeo.
-
-```bash
-# archivos sueltos, o la carpeta de la sesión y coge lo que haya dentro
-node cli.js calibrar ../grabaciones/dtp/2026-10-03_19-30-00
-```
-
-Localiza el pitido de 1 kHz con Goertzel (el mismo método que `lib/beep.js` del Estudio, a
-propósito: lo que detecte uno tiene que detectarlo el otro igual) y, **a partir de ahí**,
-el destello.
-
-> Con el equipo del podcast la conclusión fue que **no hace falta ajuste** (0 para los dos, elegido a oído en el
-> primer episodio), y que `calibrar` da valores distintos en cada sesión: no lo uses para decidir. Ver `ESTADO.md`.
-
-Buscar el destello como «la mayor subida de brillo del archivo» no funciona con material
-real, y se vio en cuanto se probó: al empezar a grabar, el ajuste automático de
-exposición mueve el brillo muchísimo, y a mitad de grabación cualquiera se mueve o
-enciende una luz. Las dos cosas dan subidas mayores que un destello de pantalla
-reflejado en una cara. Así que se busca de otra forma:
-
-- **solo cerca del pitido** (±300 ms, ajustable con `--radio`), porque los dos se
-  disparan a la vez. Es estrecho a propósito: el arranque de una grabación está lleno de
-  cambios de brillo y la mejor defensa es no mirar donde el destello no puede estar;
-- **por su forma**, comparando con el perfil del destello (golpe y caída de 350 ms), no
-  por ser el cambio más grande;
-- midiendo el fondo con un **percentil bajo** en lugar de la media, porque si justo antes
-  viene cayendo otra cosa, la media sale alta y tapa la subida que se busca. Con la media,
-  un destello real llegaba a puntuar negativo.
-
-Lo que no resuelve: si justo encima del destello hay otro cambio de brillo con su misma
-forma y varias veces mayor, gana el otro. No se puede distinguir por la señal, solo por la
-posición, y para eso ya está la ventana. La diferencia es el retardo, y da directamente el `--audio-offset` de
-cada persona.
-
-Si no hay claqueta, busca un golpe en imagen y sonido a la vez, que es lo que da una
-palmada delante de la cámara.
-
-Y si no hay ninguna marca, **no da número**. Sin ese cuidado, en material hablado el modo
-de respaldo encuentra el mayor movimiento y el mayor golpe de sonido, que no tienen nada
-que ver entre sí, y suelta algo como «−1800 ms» con confianza suficiente para parecer
-bueno. Se rechaza todo lo que pase de medio segundo, porque la latencia de una cadena de
-captura se cuenta en decenas o pocos cientos de milisegundos, y se dice cuál de las tres
-cosas falló: marca poco clara, retardo imposible, o que se esté usando el respaldo.
-
-El pitido se localiza con precisión de muestra, pero el destello solo se puede situar
-**al fotograma**: queda una incertidumbre de medio fotograma (±17 ms a 30 fps, ±8 a 60)
-que se informa junto al resultado. Verificado con el destello cayendo en distintos
-puntos del fotograma: el error nunca se sale de ahí.
-
 ### El ajuste puede ser distinto para cada persona
 
 Cada uno graba con lo que tiene —unos auriculares, el micrófono de una tableta, una
@@ -279,6 +220,9 @@ de un vistazo en la timeline por qué está cortado ahí.
 
 ### Comandos
 
+En todos los comandos de un episodio, `<carpeta>` puede ser la ruta entera, solo su fecha (`2026-11-15`, se busca en
+la carpeta fija de episodios) o no ponerse: entonces es el episodio más reciente, y se dice cuál.
+
 | | |
 |---|---|
 | `node cli.js doctor` | qué hay instalado y qué falta |
@@ -288,14 +232,14 @@ de un vistazo en la timeline por qué está cortado ahí.
 | `node cli.js selftest` | proyecto de prueba para comprobar tu Kdenlive |
 | `node cli.js multicam <archivos...>` | monta una conversación a varias cámaras |
 | `node cli.js ajustar-audio <receta>` | mueve el audio sin repetir el análisis |
-| `node cli.js calibrar <camaras...>` | mide el retardo imagen-sonido (claqueta o palmada) |
+| `node cli.js preparar [--sesiones id,id] [--fecha AAAA-MM-DD]` | el arranque en una orden: crea el episodio (con la fecha de la grabación), trae las sesiones del Estudio y las analiza. Se para sin copiar si hay una sesión de menos de 2 min o pistas a medio subir, y dice cómo seguir |
 | `node cli.js episodio nuevo [<raiz>]` / `episodio <carpeta>` | proceso semanal completo (sin raíz usa la carpeta fija de episodios) |
 | `node cli.js importar [<carpeta>] [--copiar \| --mover]` | trae las sesiones del Estudio a `originales/` (sin opción, solo las lista) |
 | `node cli.js config <carpeta> [--tomar-de-raiz]` | configuración efectiva del episodio y de qué archivo sale cada ajuste |
 | `node cli.js analizar <carpeta>` | propuesta: inicio/fin de voz, silencios y marcas de charla técnica (no propone contenido) |
 | `node cli.js aprobar <carpeta> 1.1 2.1` | pasa propuestas al `episodio.json` del episodio, con los cortes ajustados al silencio |
-| `node cli.js verificar <carpeta>` | comprueba el vídeo final: duración, −14 LUFS y pico, sin pitidos, apto para Spotify, el MP3, principio y final (✔, ✘ o «? sin comprobar») |
-| `node cli.js estado <carpeta>` | en qué fase va el proceso, en una línea, y lo que tardó cada fase la última vez |
+| `node cli.js verificar <carpeta>` | comprueba el vídeo final: duración, −14 LUFS y pico, sin pitidos, apto para Spotify, principio y final (✔, ✘ o «? sin comprobar») |
+| `node cli.js estado <carpeta>` | en qué fase va el proceso, lo que tardó cada fase la última vez y **cuál es el siguiente paso** (lo deduce de lo que hay en el episodio) |
 | `node cli.js transcribir <carpeta>` | transcripción local con Whisper (texto con tiempos por parte) |
 | `node cli.js revision <carpeta> [--silencios]` | vídeo corto (480p) para revisar el montaje desde el móvil: cada empalme numerado, principio y final |
 | `node cli.js youtube <carpeta>` | subtítulos `.srt`, transcripción e índice del vídeo final, y la descripción con capítulos (`entrega/youtube.md`) |
@@ -453,8 +397,8 @@ sonido no están en el `.kdenlive`: en Kdenlive se ve el montaje, no el aspecto 
 El color va con eq delante (en YUV) y una sola ida y vuelta a RGB con la matriz del vídeo (BT.709) en las dos
 conversiones: un 45 % menos de tiempo en el filtro y sin el desplazamiento de color que dejaba volver con BT.601. La
 salida va etiquetada BT.709 y **sin listas de edición**, como pide Spotify a los vídeos de podcast (el silencio inicial
-del AAC se compensa: el sonido sigue exacto con la imagen). Además deja `entrega/<fecha>.mp3`, el episodio en audio
-para Spotify, Apple Podcasts o iVoox (44,1 kHz, `podcast.kbps`, mismo sonido y volumen, con título y capítulos).
+del AAC se compensa: el sonido sigue exacto con la imagen). No se hace MP3 (2026-10-19):
+se sube el vídeo a YouTube y a Spotify, y Spotify reparte el audio a las demás plataformas.
 
 **PC despierto y aviso al terminar.** `episodio`, `analizar`, `transcribir`, `revision`, `render`, `youtube`, `shorts` y `clips` impiden que
 el PC se duerma mientras trabajan (en Windows, con un PowerShell aparte que se cierra solo al acabar) y, si tardaron
@@ -646,7 +590,6 @@ si no están, esas pruebas se saltan solas.
 cli.js         todos los comandos (doctor, build, render, multicam, episodio, importar…)
 sync.js        sincronía de audio por correlación cruzada (FFT, sin dependencias)
 multicam.js    reparto de material, turnos de palabra y receta del multicámara
-calibrar.js    retardo entre imagen y sonido de una cámara (claqueta o palmada)
 analisis.js    medidas con ffmpeg: volumen percibido (EBU R128) y color medio
 project.js     genera el XML del proyecto (función pura, sin tocar disco)
 recipe.js      validación de recetas (todos los fallos a la vez)
