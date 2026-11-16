@@ -10,7 +10,6 @@
 
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
-const CAL = require('./calibrar.js');
 
 const SR = 16000;
 const VENTANA = 0.05;                // 50 ms por ventana de energía
@@ -43,6 +42,19 @@ function energia(x) {
   return out;
 }
 
+/** Potencia de una frecuencia concreta en un tramo (algoritmo de Goertzel). */
+function goertzel(x, from, n, freq, sampleRate) {
+  const coeff = 2 * Math.cos((2 * Math.PI * freq) / sampleRate);
+  let s1 = 0;
+  let s2 = 0;
+  for (let i = 0; i < n; i += 1) {
+    const s0 = x[from + i] + coeff * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+}
+
 /** Tramos (en segundos) donde suena el pitido de 1 kHz de la claqueta. */
 function pitidos(x, t0, minimo) {
   const minSeg = minimo !== undefined ? minimo : 0.15;
@@ -51,7 +63,7 @@ function pitidos(x, t0, minimo) {
   for (let w = 0; (w + 1) * n <= x.length; w += 1) {
     let e = 0;
     for (let i = 0; i < n; i += 1) e += x[w * n + i] * x[w * n + i];
-    const tono = CAL.goertzel(x, w * n, n, 1000, SR);
+    const tono = goertzel(x, w * n, n, 1000, SR);
     const prop = e > 0 ? tono / ((e * n) / 2) : 0;
     hits.push(prop > 0.6 && Math.sqrt(e / n) > 0.02);
   }

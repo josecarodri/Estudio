@@ -531,14 +531,6 @@ function verificar(carpeta) {
   ok(!!v && hayAudio && (info.streams || []).some((x) => x.codec_name === 'aac'), `formato ${v ? `${v.width}x${v.height}` : '?'} con audio`,
     !v ? 'no se puede leer el vídeo' : !hayAudio ? 'el vídeo no tiene audio' : 'el audio no es AAC');
 
-  // El episodio en audio (Spotify en audio, Apple Podcasts…): que esté y que dure lo mismo que el vídeo.
-  const mp3 = path.join(r.entrega, `${nombre}.mp3`);
-  if (existe(mp3)) {
-    const dm = Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', mp3], { encoding: 'utf8' }).stdout);
-    if (!Number.isFinite(dm) || !dm) noComprobado(`el audio del podcast (no se pudo leer ${path.basename(mp3)})`);
-    else ok(Math.abs(dm - dur) <= 1, `audio del podcast: ${path.basename(mp3)} (${reloj(dm)})`, `el audio del podcast dura ${reloj(dm)} y el vídeo ${reloj(dur)}`);
-  } else if ((config.podcast || {}).activo !== false) aviso('no hay audio del podcast (MP3): se hace en el acabado');
-
   // Lo que pide Spotify a un vídeo de podcast y el MP4 de ffmpeg no cumplía: sin listas de edición y la primera
   // imagen a menos de 50 ms del principio (ver episodio.MP4_SIN_LISTAS_DE_EDICION).
   const listas = EP.tieneListasDeEdicion(final);

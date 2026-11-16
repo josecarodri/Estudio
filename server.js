@@ -35,6 +35,8 @@ const graciaMs = () => Number(process.env.GRACIA_MS ?? 45000);
 const graciaLimpiaMs = () => Number(process.env.GRACIA_LIMPIA_MS ?? 4000);
 // Pings de la sala cada 15 s; se da por muerta una conexión tras este número de pings sin respuesta (≈ 45 s).
 const PINGS_SIN_RESPUESTA = Number(process.env.PINGS_SIN_RESPUESTA ?? 3);
+// Tras un reinicio del servidor, una grabación se da por «en marcha» si sus archivos crecían hace menos de esto.
+const RECUPERAR_MS = 15 * 60 * 1000;
 
 // Registro en logs/estudio-AAAA-MM-DD.log: qué pasó y cuándo, para poder explicar una caída a posteriori.
 const { crearRegistro } = require('./lib/log');
@@ -89,8 +91,26 @@ const tracks = new Map();
 
 function getRoom(name) {
   let r = rooms.get(name);
-  if (!r) { r = { peers: new Map(), session: null }; rooms.set(name, r); }
+  if (!r) { r = { peers: new Map(), session: grabacionEnMarcha(name) }; rooms.set(name, r); }
   return r;
+}
+
+/*
+ * Si el servidor se reinició en plena grabación (se cerró su ventana, se colgó el PC), la sala la recupera del
+ * disco: es la última sesión de la sala, sin parada apuntada y con archivos que crecían hace poco. Sin esto, tras
+ * el reinicio nadie podía parar para los dos, ni marcar, ni retomar si después se caía una página.
+ */
+function grabacionEnMarcha(roomName) {
+  try {
+    const id = fs.readdirSync(path.join(REC_DIR, roomName)).filter((n) => /^\d{4}-\d{2}-\d{2}_/.test(n)).sort().pop();
+    const s = id && loadSession(roomName, id);
+    if (!s || s.stopAt || !Number.isFinite(s.startAt)) return null;
+    const ultimo = Math.max(...fs.readdirSync(s.dir).map((f) => fs.statSync(path.join(s.dir, f)).mtimeMs));
+    if (Date.now() - ultimo > RECUPERAR_MS) return null;
+    const abierta = (s.marcas || []).find((m) => m.tipo === 'corte' && m.fin == null);
+    slog('grabacion-recuperada', { sala: roomName, sesion: id, hace_s: (Date.now() - ultimo) / 1000 });
+    return { id, startAt: s.startAt, beepAt: s.beepAt, recording: true, ...(abierta ? { corteAbierto: { inicio: abierta.inicio, nombre: abierta.nombre } } : {}) };
+  } catch { return null; }
 }
 
 /** Envía un evento a una persona; si está ausente (sin conexión) no se envía y devuelve false. */
@@ -115,8 +135,22 @@ function sessionDir(room, id) { return path.join(REC_DIR, room, id); }
 /** Bytes de cabecera al principio del archivo de una pista (los WAV llevan 44). */
 const cabecera = (t) => (t.ext === 'wav' ? 44 : 0);
 
+/*
+ * session.json se escribe aparte y se cambia de nombre: así está siempre entero, aunque se vaya la luz a media
+ * escritura (uno a medias dejaría la sesión sin poder leerse). Si el cambio de nombre falla (en Windows, el
+ * antivirus con el archivo abierto), se escribe directamente.
+ */
 function saveSession(s) {
-  fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({ ...s, dir: undefined }, null, 2));
+  const file = path.join(s.dir, 'session.json');
+  const tmp = path.join(s.dir, '.session.json.tmp');
+  const texto = JSON.stringify({ ...s, dir: undefined }, null, 2);
+  try {
+    fs.writeFileSync(tmp, texto);
+    fs.renameSync(tmp, file);
+  } catch {
+    fs.writeFileSync(file, texto);
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 /*
@@ -140,7 +174,13 @@ function loadSession(room, id) {
   if (sessions.has(key)) return sessions.get(key);
   const file = path.join(sessionDir(room, id), 'session.json');
   if (!fs.existsSync(file)) return null;
-  const s = { ...JSON.parse(fs.readFileSync(file, 'utf8')), dir: sessionDir(room, id) };
+  let datos;
+  // Una sesión que no se puede leer no debe tumbar la lista de grabaciones ni el resto del servidor.
+  try { datos = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (err) {
+    slog('sesion-ilegible', { sala: room, sesion: id, error: err.message });
+    return null;
+  }
+  const s = { ...datos, dir: sessionDir(room, id) };
   sessions.set(key, s);
   return s;
 }

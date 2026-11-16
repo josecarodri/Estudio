@@ -154,3 +154,17 @@ test('micro: el aviso propio dice qué hacer; el del otro, de quién es', () => 
   assert.strictEqual(L.avisoDeMicro('bien'), '');
   assert.strictEqual(L.avisoDeMicro(null, { nombre: 'DJ' }), '');
 });
+
+test('vigilancia de la llamada: se rehace si lleva el plazo sin conectar, pero no sin sala ni con el otro ausente', () => {
+  const base = { msSinConectar: 25000, esperaMs: 20000, otroAusente: false, salaConectada: true };
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'connected' }), 'bien');
+  // La oferta se perdió: las dos páginas se quedan en «new» para siempre si nadie hace nada.
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'new' }), 'rehacer');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'connecting' }), 'rehacer');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'failed' }), 'rehacer');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'disconnected', msSinConectar: 8000 }), 'esperar', 'un corte breve se recupera solo');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'failed', otroAusente: true }), 'esperar');
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'failed', salaConectada: false }), 'esperar');
+  // Tras un intento fallido se espera más (lo dobla quien llama).
+  assert.strictEqual(L.alVigilarLlamada({ ...base, estadoPc: 'connecting', esperaMs: 40000 }), 'esperar');
+});

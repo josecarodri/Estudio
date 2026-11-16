@@ -35,6 +35,9 @@
     micEstado: null,
     micVozDb: null,
     wakeLock: null,
+    remoteAusente: false, // la otra persona perdió la conexión con la sala y se espera a que vuelva
+    sinConectarDesde: 0,  // desde cuándo la llamada no está conectada (para rehacerla si se atasca)
+    esperaLlamada: 20000, // cuánto se espera antes de rehacerla; se dobla en cada intento fallido
     recuperando: false,   // se entró para retomar una grabación tras una caída de la página
     corteAbierto: null,   // tramo «✂ cortar» abierto en la sala: { inicio (hora del servidor), nombre }
   };
@@ -343,7 +346,8 @@
     $('#btnJoin').disabled = true;
     try {
       if (!state.localStream) await startPreview();
-      await setupAudio();           // dentro del clic: necesario en iPad
+      // Dentro del clic: necesario en iPad. Si un intento anterior de entrar falló a medias, se aprovecha el audio ya montado.
+      if (state.audio) await state.ctx.resume(); else await setupAudio();
       const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
       if (cfg?.iceServers) state.iceServers = cfg.iceServers;
       state.publicUrl = cfg?.publicUrl || '';
@@ -373,6 +377,7 @@
     // estado propio repetido de vez en cuando por si la otra página se perdió el último.
     setInterval(vigilarGrabacion, 5000);
     setInterval(sendStatus, 5000);
+    setInterval(vigilarLlamada, 5000);
     window.addEventListener('beforeunload', (e) => {
       if (state.rec || state.uploaders.some((u) => !u.finished)) { e.preventDefault(); e.returnValue = ''; }
     });
@@ -424,6 +429,28 @@
     }
   }
 
+  /**
+   * Si la llamada lleva un rato sin conectar (se perdió la oferta o la respuesta, o se cayó y no vuelve sola), se
+   * rehace: esta página se pone a esperar una oferta y se la pide a la otra, igual que cuando alguien vuelve con
+   * la llamada muerta. Cada intento espera el doble (hasta 2 min) para no insistir sin fin entre dos redes que no
+   * conectan sin TURN. No afecta a la grabación local.
+   */
+  const ESPERA_LLAMADA_MS = 20000;
+  function vigilarLlamada() {
+    if (!state.pc || !state.remote) return;
+    const accion = Llamada.alVigilarLlamada({
+      estadoPc: state.pc.connectionState, msSinConectar: localNow() - state.sinConectarDesde, esperaMs: state.esperaLlamada,
+      otroAusente: state.remoteAusente, salaConectada: state.events?.readyState === 1,
+    });
+    if (accion !== 'rehacer') return;
+    Registro.anotar('llamada-atascada', { estado: state.pc.connectionState, ice: state.pc.iceConnectionState, s: Math.round((localNow() - state.sinConectarDesde) / 1000) });
+    state.esperaLlamada = Math.min(state.esperaLlamada * 2, 120000);
+    const otro = state.remote;
+    state.rehaciendo = true;
+    startCall(otro, false);
+    sendSignal(otro.id, { reiniciar: true });
+  }
+
   function updateClock(c) {
     state.clock = c;
     const el = $('#clockInfo');
@@ -469,6 +496,7 @@
       welcome: onWelcome,
       'peer-joined': (p) => {
         const mismoRemoto = state.remote?.id === p.id;
+        if (mismoRemoto) state.remoteAusente = false;
         const accion = Llamada.alEntrarOtro({ volvio: p.volvio, mismoRemoto, estadoPc: state.pc?.connectionState });
         Registro.anotar('persona-entra', { nombre: p.name, volvio: !!p.volvio, accion, pc: state.pc?.connectionState });
         if (accion === 'mantener') {
@@ -485,6 +513,7 @@
       },
       'peer-away': ({ id, graciaMs }) => {
         if (state.remote?.id !== id) return;
+        state.remoteAusente = true;
         Registro.anotar('persona-ausente', { nombre: state.remote.name, gracia_s: graciaMs / 1000, pc: state.pc?.connectionState });
         toast(`${state.remote.name} ha perdido la conexión con la sala. Se espera a que vuelva…`, 'warn');
       },
@@ -537,6 +566,7 @@
       Registro.anotar('bienvenida', { otro: otro.name, otro_ausente: !!otro.ausente, volvio: !!d.volvio, accion, pc: state.pc?.connectionState });
       // Si solo se cayó el canal de la sala y la llamada sigue viva, se conserva. Si no, soy el último en llegar: la inicio.
       if (accion !== 'mantener') startCall(otro, true);
+      state.remoteAusente = !!otro.ausente;
     } else {
       closeCall();
       setRemote(null);
@@ -588,11 +618,23 @@
   }
 
   function sendSignal(to, data) {
-    state.signalChain = state.signalChain.then(() => fetch(`/api/rooms/${encodeURIComponent(state.room)}/signal`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      // `cid` identifica esta llamada: permite a la otra parte distinguir mensajes de una llamada anterior.
-      body: JSON.stringify({ from: state.me.id, to, data: { cid: state.callId, ...data } }),
-    })).catch((err) => console.warn('señal', err));
+    // `cid` identifica esta llamada (la de ahora, no la que haya cuando le toque salir): permite a la otra parte
+    // distinguir mensajes de una llamada anterior.
+    const body = JSON.stringify({ from: state.me.id, to, data: { cid: state.callId, ...data } });
+    // En orden, y con dos reintentos si la red falla un instante: una oferta perdida deja la llamada sin conectar.
+    const enviar = async () => {
+      for (let intento = 0; ; intento++) {
+        try {
+          const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/signal`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+          if (r.status < 500) return;
+          throw new Error(`HTTP ${r.status}`);
+        } catch (err) {
+          if (intento >= 2) throw err;
+          await sleep(400 * (intento + 1));
+        }
+      }
+    };
+    state.signalChain = state.signalChain.then(enviar).catch((err) => Registro.anotar('senal-no-enviada', { mensaje: err.message }));
     return state.signalChain;
   }
 
@@ -610,6 +652,7 @@
     state.callId = randomId();
     state.remoteCid = null;
     if (offerer) state.rehaciendo = false;
+    state.sinConectarDesde = localNow();
     setRemote({ ...peer, stream: new MediaStream() });
     const pc = new RTCPeerConnection({ iceServers: state.iceServers });
     state.pc = pc;
@@ -635,11 +678,15 @@
       $('#remoteVideo').play().catch(() => {});
       if (e.track.kind === 'audio') connectRemoteAudio(stream);
     };
+    let antes = pc.connectionState;
     pc.onconnectionstatechange = () => {
+      if (state.pc !== pc) return;   // una llamada ya sustituida no cambia nada
       const st = pc.connectionState;
       Registro.anotar('llamada', { estado: st });
       $('#remoteState').textContent = { connected: '', connecting: 'conectando…', failed: 'sin conexión de vídeo', disconnected: 'reconectando…' }[st] ?? st;
-      if (st === 'connected') { state.rehaciendo = false; reportRoute(pc); }
+      if (st === 'connected') { state.rehaciendo = false; state.esperaLlamada = ESPERA_LLAMADA_MS; reportRoute(pc); }
+      else if (antes === 'connected') state.sinConectarDesde = localNow();   // el plazo de la vigilancia cuenta desde que se cayó
+      antes = st;
       if (st === 'failed') {
         if (state.offerer) pc.restartIce();
         toast(state.hasTurn

@@ -55,9 +55,6 @@ const CONFIG_POR_DEFECTO = {
   camaras: { activo: true, congelada: 4, negro: 2, tolerancia: 0.0003 },
   // YouTube: el texto fijo del final de la descripción (enlaces a las plataformas, redes…) y las etiquetas.
   youtube: { pie: '', etiquetas: [] },
-  // El episodio en audio (entrega/<fecha>.mp3) para Spotify en audio, Apple Podcasts, iVoox…: MP3 a 44,1 kHz y
-  // `kbps`, con el mismo sonido que el vídeo, título, `artista` y los capítulos de YouTube.
-  podcast: { activo: true, kbps: 192, artista: 'Dos Tipos Promedio' },
   // Tramos a quitar siempre, en segundos del reloj de la llamada: [["2:02", "2:34"]].
   cortes: [],
   // Limpieza de un micro en un tramo: [{ persona: "jc", desde: 640, hasta: 730 }].
@@ -616,66 +613,6 @@ const MP4_SIN_LISTAS_DE_EDICION = ['-use_editlist', '0', '-movflags', '+faststar
 const PRIMING_AAC_S = 1024 / 48000;
 
 /*
- * El episodio en audio para las plataformas de podcast (Spotify en audio, Apple Podcasts, iVoox…): MP3 a 44,1 kHz
- * con el mismo sonido que el vídeo (los mismos filtros y el mismo normalizado, con la medida del acabado si se
- * pasa). Sale del render en bruto, no del vídeo final: así no se recomprime un AAC. Título y capítulos se le
- * ponen aparte (etiquetarPodcast), sin volver a codificar. Devuelve { salida } o { error }.
- */
-function audioPodcast(entrada, salida, config, medidaDelAcabado) {
-  const pc = { ...CONFIG_POR_DEFECTO.podcast, ...(config.podcast || {}) };
-  const filtros = filtrosAudio(config);
-  const medida = medidaDelAcabado || medirVolumen(entrada, filtros, config);
-  if (medida.error) return { error: medida.error };
-  fs.mkdirSync(path.dirname(salida), { recursive: true });
-  const tmp = `${path.resolve(salida)}.haciendo.mp3`;
-  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', entrada, '-vn', '-af', [...filtros, normalizado(config, medida)].join(','),
-    '-ar', '44100', '-c:a', 'libmp3lame', '-b:a', `${Number(pc.kbps) || 192}k`, '-id3v2_version', '3', tmp],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (res.status !== 0) {
-    fs.rmSync(tmp, { force: true });
-    return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
-  }
-  fs.renameSync(tmp, path.resolve(salida));
-  return { salida };
-}
-
-/* Texto para un archivo de metadatos de ffmpeg (;FFMETADATA1): =, ;, #, \ y los saltos de línea van escapados. */
-const textoMetadatos = (t) => String(t).replace(/[=;#\\\n]/g, (c) => `\\${c}`);
-
-/*
- * Pone título, autor y capítulos al MP3 del podcast sin volver a codificarlo (segundos). Los capítulos son los
- * de YouTube ({ t, titulo }, en segundos del vídeo final, que dura lo mismo que el audio); los leen Apple Podcasts
- * y otros reproductores (Spotify toma los de la descripción). datos: { titulo, capitulos, duracion }.
- */
-function etiquetarPodcast(archivo, config, datos) {
-  const pc = { ...CONFIG_POR_DEFECTO.podcast, ...(config.podcast || {}) };
-  const d = datos || {};
-  const lineas = [';FFMETADATA1', `title=${textoMetadatos(d.titulo || path.basename(archivo, path.extname(archivo)))}`];
-  if (pc.artista) lineas.push(`artist=${textoMetadatos(pc.artista)}`, `album=${textoMetadatos(pc.artista)}`);
-  lineas.push('genre=Podcast');
-  const caps = (d.capitulos || []).filter((c) => Number.isFinite(c.t)).sort((a, b) => a.t - b.t);
-  caps.forEach((c, i) => {
-    const fin = i + 1 < caps.length ? caps[i + 1].t : Number(d.duracion) || c.t + 1;
-    lineas.push('[CHAPTER]', 'TIMEBASE=1/1000', `START=${Math.round(c.t * 1000)}`, `END=${Math.round(fin * 1000)}`, `title=${textoMetadatos(c.titulo)}`);
-  });
-  const meta = `${path.resolve(archivo)}.meta.txt`;
-  const tmp = `${path.resolve(archivo)}.etiquetando.mp3`;
-  fs.writeFileSync(meta, `${lineas.join('\n')}\n`, 'utf8');
-  try {
-    const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', archivo, '-f', 'ffmetadata', '-i', meta, '-map', '0:a', '-map_metadata', '1',
-      '-map_chapters', '1', '-c', 'copy', '-id3v2_version', '3', tmp], { encoding: 'utf8' });
-    if (res.status !== 0) {
-      fs.rmSync(tmp, { force: true });
-      return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
-    }
-    fs.renameSync(tmp, path.resolve(archivo));
-    return { capitulos: caps.length };
-  } finally {
-    fs.rmSync(meta, { force: true });
-  }
-}
-
-/*
  * Parámetros de vídeo del acabado. x264 es la referencia de calidad; NVENC (la tarjeta gráfica)
  * tarda una fracción. A YouTube le llega igual de bien: lo vuelve a codificar.
  * Calidad de NVENC = crf + 4: con crf + 1 el archivo salía un 62 % mayor que el de x264 para la misma
@@ -825,6 +762,4 @@ module.exports = {
   medirVolumen,
   acabado,
   normalizado,
-  audioPodcast,
-  etiquetarPodcast,
 };

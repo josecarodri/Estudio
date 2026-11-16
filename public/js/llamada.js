@@ -58,6 +58,19 @@
   }
 
   /**
+   * Vigilancia de la llamada, cada pocos segundos. Si lleva `esperaMs` sin estar conectada (la oferta o la
+   * respuesta se perdieron por el camino, o la conexión se cayó y no se recupera sola), se rehace entera en vez
+   * de quedarse en «conectando…» hasta que alguien recargue. No se rehace mientras la otra persona está ausente
+   * de la sala o esta página no tiene sala: no habría por dónde negociar.
+   * Devuelve 'bien', 'esperar' o 'rehacer'.
+   */
+  function alVigilarLlamada({ estadoPc, msSinConectar, esperaMs = 20000, otroAusente, salaConectada }) {
+    if (estadoPc === 'connected') return 'bien';
+    if (otroAusente || !salaConectada) return 'esperar';
+    return msSinConectar >= esperaMs ? 'rehacer' : 'esperar';
+  }
+
+  /**
    * Recuperación tras la caída de la página en plena grabación. La página deja una marca (en el navegador)
    * mientras graba y la borra al parar a propósito: si al abrir sigue ahí y es reciente, es que se cerró grabando.
    * Devuelve la marca si es válida (con los segundos transcurridos) o null.
@@ -168,7 +181,7 @@
   }
 
   const api = {
-    viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio,
+    viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio, alVigilarLlamada,
     recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro, avisoDeMarca, textoBotonCorte,
     nivelDelMicro, avisoDeMicro,
   };
