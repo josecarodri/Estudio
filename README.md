@@ -38,7 +38,9 @@ Por cada persona, en `grabaciones/<sala>/<fecha_hora>/` del PC:
 | `ana_llamada.mp4` / `.webm` | La llamada tal como se vio: las dos cámaras lado a lado (720p) + el audio de ambos. Referencia opcional. |
 | `session.json` | Tiempos de cada pista en el reloj común y datos para sincronizar. |
 
-El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graba en MP4 si puede y si no en WebM. La cámara se
+El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graban en **WebM con H.264** (`jc_camara.webm`): en MP4 su
+grabador cierra la página cuando el archivo llega a 4 GB (ver «Resistencia a fallos»). El editor lo pasa a MP4 sin
+recodificar al importar. La cámara se
 pide a 30 fps como mucho (si la cámara lo admite): el montaje va a 30, y a 60 se gastan los bits en fotogramas que se tiran.
 
 Al descargarlos desde **Grabaciones**, los archivos llegan con la sesión delante del nombre
@@ -53,7 +55,6 @@ directamente de `grabaciones/`, con su `session.json`.
 
 - **En el PC (anfitrión):** Windows, Mac o Linux con **Node.js 18 o superior** (https://nodejs.org) y Chrome o Edge.
 - **En el iPad (invitado):** Safari, iPadOS 16.4 o superior recomendado. No hay que instalar nada.
-- Opcional, para `npm run alinear`: **ffmpeg** (`winget install Gyan.FFmpeg` en Windows, `brew install ffmpeg` en Mac).
 - Para la mejor calidad de audio: **auriculares** en los dos lados.
 - Conexión: para 1080p conviene que el invitado tenga **≥ 12 Mbps de subida**. Si tiene menos no se pierde nada: lo
   que no da tiempo a subir se guarda en su iPad y se termina de subir al acabar (o elige 720p).
@@ -89,7 +90,7 @@ Aparece algo así:
 5. Cualquiera de los dos pulsa **● Grabar**: cuenta atrás, destello, y a grabar.
 6. **■ Detener** para los dos. Espera a que en *Archivos de este dispositivo* ponga **✓ Guardado en el servidor** en
    ambos (el PC muestra también el progreso del iPad). **El invitado no debe cerrar Safari hasta entonces.**
-7. Abre **Grabaciones** (arriba a la derecha) o la carpeta `grabaciones/`. Opcional: `npm run alinear`.
+7. Abre **Grabaciones** (arriba a la derecha) o la carpeta `grabaciones/`. Para editar no hay que descargar nada (ver «Edición del podcast»).
 
 > El PC tiene que estar encendido y con `npm run internet` en marcha durante toda la sesión (y hasta que termine la
 > subida). No hace falta abrir puertos en el router.
@@ -150,20 +151,11 @@ la casilla del enlace dice «Preparando el enlace por internet…» y se rellena
 2. **Claqueta digital**: 1 s después del inicio se inserta un **pitido de 1 kHz** directamente en todas las grabaciones
    (no se oye por los altavoces ni pasa por la llamada), a la misma hora en los dos dispositivos. Al detener hay un
    **segundo pitido**, 1 s antes del final. En pantalla verás un destello en cada uno.
-3. **Alineado automático** (`npm run alinear`): busca los pitidos en cada archivo y genera en `alineados/` versiones que
-   empiezan en el mismo instante, con la misma duración, vídeo H.264 a **30 fps constantes** y audio a 48 kHz, con los
-   pitidos silenciados, y con dos personas una vista **`lado_a_lado.mp4`** (las dos cámaras juntas, para usar como tercer ángulo en un multicámara). Con el pitido final **corrige la deriva**: los relojes de dos dispositivos distintos nunca van
-   exactamente a la misma velocidad y en una hora pueden separarse decenas de milisegundos; el alineado estira o encoge
-   cada pista para compensarlo. Un tramo que empezó tarde (retomado tras una caída, o de una página que se unió con la
-   grabación en marcha) se coloca en su sitio con silencio y negro delante, y una pista que se cortó antes de tiempo no
-   recorta a las demás. En un tramo así no se busca el pitido de inicio (no lo tiene): si alguien volvió poco antes de
-   parar, el primer pitido de su archivo es el de cierre, que es el que lo sitúa con exactitud.
-
-En las pruebas, con 120 ms de latencia simulada entre los dos, el inicio queda alineado con menos de 1 ms de
-diferencia; con una deriva exagerada de ±300 ppm (18 ms por minuto), tras corregirla quedan a ±1,5 ms.
-
-Sin `ffmpeg` también puedes alinear a mano en Premiere / DaVinci Resolve / Final Cut: busca el pitido del primer segundo
-en la forma de onda de cada pista (o usa «sincronizar por audio»).
+3. **Al editar** (`edicion/`): el editor coloca cada pista en su sitio contra la grabación de la llamada y usa los
+   pitidos para saber dónde empieza y acaba la conversación. Un tramo que empezó tarde (retomado tras una caída, o de
+   una página que se unió con la grabación en marcha) no lleva pitido de inicio: se sitúa con la hora de inicio de su
+   pista y la grabación de la llamada. No se corrige deriva entre los relojes: medida en el primer episodio, no la
+   hay (1 ms en una hora).
 
 ## Consejos para una buena grabación
 
@@ -193,6 +185,13 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
 
 ## Resistencia a fallos
 
+- **El límite de 4 GB de Edge y Chrome** (2026-11-16): grabando en MP4, su grabador cierra la página cuando el archivo
+  de una pista llega a 4 GB (2^32 bytes: unos 58 min de cámara a 1080p). Así se cortaron las grabaciones del 2026-10-03
+  y del 2026-10-18, siempre en el PC y nunca en el iPad. Está reproducido con `http://localhost:8080/prueba-4gb.html`
+  (graba ruido y lo tira: llega a 4 GB en unos minutos y dice si la página aguanta con cada formato): con MP4 se cae
+  justo a los 4 GB; con WebM pasa de largo. Por eso el PC graba en WebM. Si un navegador de esa familia solo supiera
+  MP4, la página avisa desde los 3,4 GB para parar y volver a grabar, y cada latido del registro lleva
+  `pista_mayor_mb`.
 - Cada segundo de grabación se guarda primero **en el propio dispositivo** (IndexedDB) y después se sube en orden.
   Si internet se corta, la grabación continúa y la subida se reanuda sola al volver la conexión.
 - Si se cae la conexión con la sala (un parpadeo del wifi, de la red del iPad o del túnel), la otra persona **no cuelga
@@ -200,6 +199,9 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
   (vídeo y audio, que van por otro camino) sigue como estaba, sin imagen congelada. Solo se rehace si la llamada
   murió de verdad o si la persona vuelve con una página nueva (p. ej. tras recargar). Un cierre a propósito de la
   pestaña apenas espera.
+- **Si la llamada se queda sin conectar** (la oferta o la respuesta se perdieron por el camino, o se cayó y no vuelve
+  sola), a los 20 s se rehace entera sin que nadie toque nada; antes se quedaba en «conectando…» hasta recargar. Cada
+  intento espera el doble (hasta 2 min). La grabación local no se entera. En el registro: `llamada-atascada`.
 - **Si la página se cierra o falla en plena grabación** (p. ej. un fallo del navegador), la otra persona **sigue
   grabando** sin tocar nada. Al volver a abrir el estudio (en los siguientes 15 min) aparece un aviso grande:
   **«La página se cerró mientras se grababa — Volver a entrar y seguir grabando»**. Con un clic entra en la sala y
@@ -226,8 +228,12 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
 - Si el servidor se reinicia, las pistas continúan donde se quedaron (si se cayó justo entre guardar un trozo y
   apuntarlo, ese trozo no queda duplicado). Un trozo solo se confirma a la página cuando está guardado **y** apuntado:
   si falla apuntarlo (disco lleno, antivirus), se quita y el reintento lo guarda, así la página no lo borra antes de tiempo. Con `npm run internet` el enlace cambia: lo que el invitado tenga pendiente
-  solo se puede rescatar desde su página vieja con **Descargar copia** (ver Tailscale, más arriba). Si tras el reinicio
-  el servidor ya no tiene la grabación en marcha, **■ Detener** la para igualmente en esa página.
+  solo se puede rescatar desde su página vieja con **Descargar copia** (ver Tailscale, más arriba). **La grabación
+  en marcha también se recupera** (es la última sesión de la sala, sin parada y con archivos que crecían hace menos de
+  15 min; en el registro, `grabacion-recuperada`): se puede parar para los dos, marcar y retomar como si nada. Si aun
+  así el servidor no la tuviera, **■ Detener** la para igualmente en esa página.
+- `session.json` se escribe siempre entero (aparte, y se cambia de nombre): un corte de luz no lo deja a medias, y una
+  sesión ilegible no tumba la lista de grabaciones.
 - Los WAV valen en todo momento (su cabecera se actualiza con cada trozo), aunque la página muera antes de cerrarlos,
   y la hora de inicio de cada pista queda en `session.json` en cuanto se sabe.
 - Si el audio del dispositivo se detiene en plena grabación (en el iPad: una llamada, Siri…), la página avisa para
@@ -273,29 +279,30 @@ llamada partida se une en una.
 
 ```
 cd edicion
-node cli.js episodio nuevo                       # carpeta del episodio de hoy
-node cli.js importar --copiar                    # trae las sesiones del Estudio
-node cli.js analizar <carpeta>                   # propuesta de cortes (y transcripción)
-node cli.js episodio <carpeta> --solo-montaje    # proyecto para revisarlo en Kdenlive
-node cli.js episodio <carpeta> --reanudar        # render + acabado + verificación
-node cli.js youtube <carpeta>                    # subtítulos, capítulos y descripción
-node cli.js shorts <carpeta>                     # shorts verticales de los ★
-node cli.js limpiar <carpeta> --estudio          # qué se puede borrar ya (con --confirmar, lo borra)
+node cli.js preparar                  # crea el episodio, trae las sesiones del Estudio y propone cortes
+node cli.js estado                    # por dónde va y cuál es el siguiente paso
+node cli.js episodio --solo-montaje   # proyecto para revisarlo en Kdenlive
+node cli.js revision                  # vídeo corto con cada empalme, para dar el visto bueno desde el móvil
+node cli.js episodio --reanudar       # render + acabado + verificación
+node cli.js youtube                   # subtítulos, capítulos y descripción
+node cli.js shorts                    # shorts verticales de los ★
+node cli.js limpiar --estudio         # qué se puede borrar ya (con --confirmar, lo borra)
 ```
+
+Sin carpeta, cada comando trabaja sobre el episodio más reciente (o sobre el de la fecha que se le dé: `2026-11-15`).
 
 Además cubre con la otra cámara los tramos en que una se congela o se queda en negro, pone a los dos en pantalla
 partida cuando la conversación va y viene deprisa, y el nombre de cada uno la primera vez que sale.
 
 Hace falta **ffmpeg** y, para renderizar, **Kdenlive** (trae `melt`). Para transcribir, whisper.cpp (opcional). Con
-Claude Code, el skill `/episodio` lleva el proceso entero. Detalles: [`edicion/README.md`](edicion/README.md); estado
-y decisiones: [`edicion/ESTADO.md`](edicion/ESTADO.md).
+Claude Code, el skill `/episodio` lleva el proceso entero. Detalles: [`edicion/README.md`](edicion/README.md); lo vigente
+y lo pendiente: [`edicion/ESTADO.md`](edicion/ESTADO.md); cómo se llegó a cada decisión: [`edicion/HISTORIAL.md`](edicion/HISTORIAL.md).
 
 ## Estructura
 
 ```
 server.js                Servidor: web, sala por WebSocket, reloj común, recepción de grabaciones, TURN, túnel
 lib/core.js              Utilidades (WAV, nombres, orden de trozos)
-lib/beep.js              Detección de los pitidos de sincronía (Goertzel)
 lib/env.js               Lectura de .env
 public/index.html        Estudio (preparación + llamada + grabación)
 public/grabaciones.html  Lista de sesiones y descargas
@@ -303,7 +310,6 @@ public/js/app.js         WebRTC, grabadores, claqueta, interfaz
 public/js/uploader.js    Guardado local + subida en orden con reintentos
 public/js/clock.js       Reloj común
 public/js/pcm-worklet.js Captura de audio WAV con inicio exacto
-tools/alinear.js         Alineado, corrección de deriva y conversión con ffmpeg
 tests/                   Pruebas de la grabación (npm test pasa también las de edicion/tests)
 edicion/                 Editor del podcast: montaje en Kdenlive, render y acabado (ver edicion/README.md)
 .claude/skills/episodio/ Proceso fijo para editar un episodio con Claude Code

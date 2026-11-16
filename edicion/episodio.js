@@ -55,9 +55,6 @@ const CONFIG_POR_DEFECTO = {
   camaras: { activo: true, congelada: 4, negro: 2, tolerancia: 0.0003 },
   // YouTube: el texto fijo del final de la descripción (enlaces a las plataformas, redes…) y las etiquetas.
   youtube: { pie: '', etiquetas: [] },
-  // El episodio en audio (entrega/<fecha>.mp3) para Spotify en audio, Apple Podcasts, iVoox…: MP3 a 44,1 kHz y
-  // `kbps`, con el mismo sonido que el vídeo, título, `artista` y los capítulos de YouTube.
-  podcast: { activo: true, kbps: 192, artista: 'Dos Tipos Promedio' },
   // Tramos a quitar siempre, en segundos del reloj de la llamada: [["2:02", "2:34"]].
   cortes: [],
   // Limpieza de un micro en un tramo: [{ persona: "jc", desde: 640, hasta: 730 }].
@@ -271,33 +268,116 @@ function descubrirSesionesEstudio(carpeta, horas) {
 }
 
 /*
+ * Edge y Chrome graban la cámara y la llamada en WebM (en MP4 la página se les cierra al llegar a 4 GB). Ese WebM
+ * no dice cuánto dura ni tiene índice, y así no se puede montar: se pasa a MP4 sin recodificar (lo que tarda una
+ * copia; la imagen y el sonido son los mismos, bit a bit). Devuelve { salida } o { error }.
+ */
+// Las copias de rescate («….resto-123.webm») no: se juntan byte a byte con su WebM antes de importar.
+const ES_WEBM_DE_VIDEO = /_(camara|llamada)\.webm$/i;
+function webmAMp4(origen, salida) {
+  const tmp = `${salida}.haciendo.mp4`;
+  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', origen, '-map', '0', '-c', 'copy', tmp],
+    { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (res.error || res.status !== 0) {
+    fs.rmSync(tmp, { force: true });
+    return { error: (res.error ? res.error.message : (res.stderr || 'ffmpeg falló')).trim().split('\n').slice(-2).join(' · ') };
+  }
+  fs.renameSync(tmp, salida);
+  return { salida };
+}
+
+/* En el session.json copiado, las pistas convertidas pasan a llamarse como su MP4 (el editor las busca por nombre). */
+function renombrarEnSesion(archivoSesion, renombres) {
+  if (!Object.keys(renombres).length || !fs.existsSync(archivoSesion)) return;
+  let s;
+  try { s = JSON.parse(fs.readFileSync(archivoSesion, 'utf8')); } catch { return; }
+  for (const t of Object.values(s.tracks || {})) {
+    if (t && renombres[t.file]) { t.archivoOriginal = t.file; t.file = renombres[t.file]; }
+  }
+  fs.writeFileSync(archivoSesion, JSON.stringify(s, null, 2));
+}
+
+/*
+ * Vídeos WebM que quedaron sin convertir en originales/ (traídos a mano o de Descargas): se convierten ahí mismo
+ * y el WebM se aparta a `.webm/`, fuera de lo que se monta. Devuelve los nombres convertidos; lanza si uno falla.
+ */
+function convertirWebmSueltos(originales) {
+  const hechos = [];
+  let carpetas = [];
+  try {
+    carpetas = [originales, ...fs.readdirSync(originales, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => path.join(originales, e.name))];
+  } catch { return hechos; }
+  for (const dir of carpetas) {
+    const renombres = {};
+    for (const n of fs.readdirSync(dir).filter((x) => ES_WEBM_DE_VIDEO.test(x))) {
+      const mp4 = path.join(dir, n.replace(/\.webm$/i, '.mp4'));
+      const r = webmAMp4(path.join(dir, n), mp4);
+      if (r.error) throw new Error(`no se pudo pasar ${n} a MP4: ${r.error}`);
+      fs.mkdirSync(path.join(dir, '.webm'), { recursive: true });
+      fs.renameSync(path.join(dir, n), path.join(dir, '.webm', n));
+      renombres[n] = path.basename(mp4);
+      hechos.push(n);
+    }
+    renombrarEnSesion(path.join(dir, 'session.json'), renombres);
+  }
+  return hechos;
+}
+
+/*
  * Copia (o mueve) una sesión del Estudio a originales/<sesión>/, con su session.json. Lo que ya está
  * con el mismo tamaño se salta, así que se puede repetir sin miedo (por ejemplo, si el invitado
- * terminó de subir después).
+ * terminó de subir después). Los vídeos en WebM (los del PC) llegan ya convertidos a MP4 (ver webmAMp4):
+ * se convierten leyendo del Estudio, sin copia intermedia, y se apunta de qué tamaño era el WebM para no repetirlo.
  */
 function importarSesion(sesion, originales, opciones) {
   const o = opciones || {};
   const destino = path.join(originales, sesion.id);
   fs.mkdirSync(destino, { recursive: true });
   const hechos = [];
+  const renombres = {};
+  const mover = (de, a) => {
+    try { fs.renameSync(de, a); } catch (e) {
+      if (e.code !== 'EXDEV') throw e;
+      fs.copyFileSync(de, a);
+      fs.unlinkSync(de);
+    }
+  };
   for (const f of [...sesion.archivos, { nombre: 'session.json', ruta: sesion.meta, bytes: fs.statSync(sesion.meta).size }]) {
+    if (ES_WEBM_DE_VIDEO.test(f.nombre)) {
+      const nombre = f.nombre.replace(/\.webm$/i, '.mp4');
+      const mp4 = path.join(destino, nombre);
+      const marca = path.join(destino, `.${nombre}.de-webm`);
+      renombres[f.nombre] = nombre;
+      if (fs.existsSync(mp4) && fs.existsSync(marca) && fs.readFileSync(marca, 'utf8').trim() === String(f.bytes)) {
+        hechos.push({ nombre, accion: 'ya estaba' });
+        continue;
+      }
+      const r = webmAMp4(f.ruta, mp4);
+      if (r.error) throw new Error(`no se pudo pasar ${f.nombre} a MP4: ${r.error}`);
+      fs.writeFileSync(marca, `${f.bytes}\n`);
+      // Al mover, el WebM (el original de verdad) se guarda aparte, fuera de lo que se monta.
+      if (o.mover) {
+        fs.mkdirSync(path.join(destino, '.webm'), { recursive: true });
+        mover(f.ruta, path.join(destino, '.webm', f.nombre));
+      }
+      hechos.push({ nombre, accion: 'convertido a mp4' });
+      continue;
+    }
     const a = path.join(destino, f.nombre);
     if (fs.existsSync(a) && fs.statSync(a).size === f.bytes && f.nombre !== 'session.json') {
       hechos.push({ nombre: f.nombre, accion: 'ya estaba' });
       continue;
     }
     if (o.mover && f.nombre !== 'session.json') {
-      try { fs.renameSync(f.ruta, a); } catch (e) {
-        if (e.code !== 'EXDEV') throw e;
-        fs.copyFileSync(f.ruta, a);
-        fs.unlinkSync(f.ruta);
-      }
+      mover(f.ruta, a);
       hechos.push({ nombre: f.nombre, accion: 'movido' });
     } else {
       fs.copyFileSync(f.ruta, a);
       hechos.push({ nombre: f.nombre, accion: 'copiado' });
     }
   }
+  renombrarEnSesion(path.join(destino, 'session.json'), renombres);
   return { destino, hechos };
 }
 
@@ -315,6 +395,32 @@ function rutas(carpeta) {
     montaje: path.join(base, 'montaje'),
     entrega: path.join(base, 'entrega'),
   };
+}
+
+/* El episodio más reciente de la raíz (las carpetas se llaman por su fecha), o null. */
+function episodioReciente(raiz) {
+  const base = path.resolve(raiz || RAIZ_POR_DEFECTO);
+  let nombres = [];
+  try { nombres = fs.readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory() && /^\d{4}-\d{2}-\d{2}/.test(e.name)).map((e) => e.name); } catch { return null; }
+  return nombres.length ? path.join(base, nombres.sort().pop()) : null;
+}
+
+/*
+ * La carpeta de un episodio a partir de lo que se escriba: una ruta, solo su fecha («2026-11-15», se busca en la
+ * raíz de episodios) o nada (el más reciente). Así no hay que copiar la ruta entera en cada comando.
+ */
+function resolverCarpeta(valor, raiz) {
+  if (valor === undefined || valor === null || valor === '') {
+    const reciente = episodioReciente(raiz);
+    if (!reciente) throw new Error(`no hay episodios en ${path.resolve(raiz || RAIZ_POR_DEFECTO)}. Empieza con: node cli.js preparar`);
+    return reciente;
+  }
+  const texto = String(valor);
+  if (/^\d{4}-\d{2}-\d{2}[\w-]*$/.test(texto) && !fs.existsSync(path.resolve(texto))) {
+    const enRaiz = path.join(path.resolve(raiz || RAIZ_POR_DEFECTO), texto);
+    if (fs.existsSync(enRaiz)) return enRaiz;
+  }
+  return texto;
 }
 
 function crearEstructura(carpeta) {
@@ -616,66 +722,6 @@ const MP4_SIN_LISTAS_DE_EDICION = ['-use_editlist', '0', '-movflags', '+faststar
 const PRIMING_AAC_S = 1024 / 48000;
 
 /*
- * El episodio en audio para las plataformas de podcast (Spotify en audio, Apple Podcasts, iVoox…): MP3 a 44,1 kHz
- * con el mismo sonido que el vídeo (los mismos filtros y el mismo normalizado, con la medida del acabado si se
- * pasa). Sale del render en bruto, no del vídeo final: así no se recomprime un AAC. Título y capítulos se le
- * ponen aparte (etiquetarPodcast), sin volver a codificar. Devuelve { salida } o { error }.
- */
-function audioPodcast(entrada, salida, config, medidaDelAcabado) {
-  const pc = { ...CONFIG_POR_DEFECTO.podcast, ...(config.podcast || {}) };
-  const filtros = filtrosAudio(config);
-  const medida = medidaDelAcabado || medirVolumen(entrada, filtros, config);
-  if (medida.error) return { error: medida.error };
-  fs.mkdirSync(path.dirname(salida), { recursive: true });
-  const tmp = `${path.resolve(salida)}.haciendo.mp3`;
-  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', entrada, '-vn', '-af', [...filtros, normalizado(config, medida)].join(','),
-    '-ar', '44100', '-c:a', 'libmp3lame', '-b:a', `${Number(pc.kbps) || 192}k`, '-id3v2_version', '3', tmp],
-  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (res.status !== 0) {
-    fs.rmSync(tmp, { force: true });
-    return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
-  }
-  fs.renameSync(tmp, path.resolve(salida));
-  return { salida };
-}
-
-/* Texto para un archivo de metadatos de ffmpeg (;FFMETADATA1): =, ;, #, \ y los saltos de línea van escapados. */
-const textoMetadatos = (t) => String(t).replace(/[=;#\\\n]/g, (c) => `\\${c}`);
-
-/*
- * Pone título, autor y capítulos al MP3 del podcast sin volver a codificarlo (segundos). Los capítulos son los
- * de YouTube ({ t, titulo }, en segundos del vídeo final, que dura lo mismo que el audio); los leen Apple Podcasts
- * y otros reproductores (Spotify toma los de la descripción). datos: { titulo, capitulos, duracion }.
- */
-function etiquetarPodcast(archivo, config, datos) {
-  const pc = { ...CONFIG_POR_DEFECTO.podcast, ...(config.podcast || {}) };
-  const d = datos || {};
-  const lineas = [';FFMETADATA1', `title=${textoMetadatos(d.titulo || path.basename(archivo, path.extname(archivo)))}`];
-  if (pc.artista) lineas.push(`artist=${textoMetadatos(pc.artista)}`, `album=${textoMetadatos(pc.artista)}`);
-  lineas.push('genre=Podcast');
-  const caps = (d.capitulos || []).filter((c) => Number.isFinite(c.t)).sort((a, b) => a.t - b.t);
-  caps.forEach((c, i) => {
-    const fin = i + 1 < caps.length ? caps[i + 1].t : Number(d.duracion) || c.t + 1;
-    lineas.push('[CHAPTER]', 'TIMEBASE=1/1000', `START=${Math.round(c.t * 1000)}`, `END=${Math.round(fin * 1000)}`, `title=${textoMetadatos(c.titulo)}`);
-  });
-  const meta = `${path.resolve(archivo)}.meta.txt`;
-  const tmp = `${path.resolve(archivo)}.etiquetando.mp3`;
-  fs.writeFileSync(meta, `${lineas.join('\n')}\n`, 'utf8');
-  try {
-    const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', archivo, '-f', 'ffmetadata', '-i', meta, '-map', '0:a', '-map_metadata', '1',
-      '-map_chapters', '1', '-c', 'copy', '-id3v2_version', '3', tmp], { encoding: 'utf8' });
-    if (res.status !== 0) {
-      fs.rmSync(tmp, { force: true });
-      return { error: (res.stderr || 'ffmpeg falló').trim().split('\n').slice(-2).join(' · ') };
-    }
-    fs.renameSync(tmp, path.resolve(archivo));
-    return { capitulos: caps.length };
-  } finally {
-    fs.rmSync(meta, { force: true });
-  }
-}
-
-/*
  * Parámetros de vídeo del acabado. x264 es la referencia de calidad; NVENC (la tarjeta gráfica)
  * tarda una fracción. A YouTube le llega igual de bien: lo vuelve a codificar.
  * Calidad de NVENC = crf + 4: con crf + 1 el archivo salía un 62 % mayor que el de x264 para la misma
@@ -794,6 +840,10 @@ module.exports = {
   CLAVES_DEL_EPISODIO,
   PLANTILLA_EPISODIO,
   RAIZ_POR_DEFECTO,
+  webmAMp4,
+  convertirWebmSueltos,
+  episodioReciente,
+  resolverCarpeta,
   DESCARGAS_POR_DEFECTO,
   ESTUDIO_POR_DEFECTO,
   PREFIJO_SESION,
@@ -825,6 +875,4 @@ module.exports = {
   medirVolumen,
   acabado,
   normalizado,
-  audioPodcast,
-  etiquetarPodcast,
 };

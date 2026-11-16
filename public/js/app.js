@@ -35,6 +35,9 @@
     micEstado: null,
     micVozDb: null,
     wakeLock: null,
+    remoteAusente: false, // la otra persona perdió la conexión con la sala y se espera a que vuelva
+    sinConectarDesde: 0,  // desde cuándo la llamada no está conectada (para rehacerla si se atasca)
+    esperaLlamada: 20000, // cuánto se espera antes de rehacerla; se dobla en cada intento fallido
     recuperando: false,   // se entró para retomar una grabación tras una caída de la página
     corteAbierto: null,   // tramo «✂ cortar» abierto en la sala: { inicio (hora del servidor), nombre }
   };
@@ -343,7 +346,8 @@
     $('#btnJoin').disabled = true;
     try {
       if (!state.localStream) await startPreview();
-      await setupAudio();           // dentro del clic: necesario en iPad
+      // Dentro del clic: necesario en iPad. Si un intento anterior de entrar falló a medias, se aprovecha el audio ya montado.
+      if (state.audio) await state.ctx.resume(); else await setupAudio();
       const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => null);
       if (cfg?.iceServers) state.iceServers = cfg.iceServers;
       state.publicUrl = cfg?.publicUrl || '';
@@ -373,6 +377,7 @@
     // estado propio repetido de vez en cuando por si la otra página se perdió el último.
     setInterval(vigilarGrabacion, 5000);
     setInterval(sendStatus, 5000);
+    setInterval(vigilarLlamada, 5000);
     window.addEventListener('beforeunload', (e) => {
       if (state.rec || state.uploaders.some((u) => !u.finished)) { e.preventDefault(); e.returnValue = ''; }
     });
@@ -424,6 +429,28 @@
     }
   }
 
+  /**
+   * Si la llamada lleva un rato sin conectar (se perdió la oferta o la respuesta, o se cayó y no vuelve sola), se
+   * rehace: esta página se pone a esperar una oferta y se la pide a la otra, igual que cuando alguien vuelve con
+   * la llamada muerta. Cada intento espera el doble (hasta 2 min) para no insistir sin fin entre dos redes que no
+   * conectan sin TURN. No afecta a la grabación local.
+   */
+  const ESPERA_LLAMADA_MS = 20000;
+  function vigilarLlamada() {
+    if (!state.pc || !state.remote) return;
+    const accion = Llamada.alVigilarLlamada({
+      estadoPc: state.pc.connectionState, msSinConectar: localNow() - state.sinConectarDesde, esperaMs: state.esperaLlamada,
+      otroAusente: state.remoteAusente, salaConectada: state.events?.readyState === 1,
+    });
+    if (accion !== 'rehacer') return;
+    Registro.anotar('llamada-atascada', { estado: state.pc.connectionState, ice: state.pc.iceConnectionState, s: Math.round((localNow() - state.sinConectarDesde) / 1000) });
+    state.esperaLlamada = Math.min(state.esperaLlamada * 2, 120000);
+    const otro = state.remote;
+    state.rehaciendo = true;
+    startCall(otro, false);
+    sendSignal(otro.id, { reiniciar: true });
+  }
+
   function updateClock(c) {
     state.clock = c;
     const el = $('#clockInfo');
@@ -469,6 +496,7 @@
       welcome: onWelcome,
       'peer-joined': (p) => {
         const mismoRemoto = state.remote?.id === p.id;
+        if (mismoRemoto) state.remoteAusente = false;
         const accion = Llamada.alEntrarOtro({ volvio: p.volvio, mismoRemoto, estadoPc: state.pc?.connectionState });
         Registro.anotar('persona-entra', { nombre: p.name, volvio: !!p.volvio, accion, pc: state.pc?.connectionState });
         if (accion === 'mantener') {
@@ -485,6 +513,7 @@
       },
       'peer-away': ({ id, graciaMs }) => {
         if (state.remote?.id !== id) return;
+        state.remoteAusente = true;
         Registro.anotar('persona-ausente', { nombre: state.remote.name, gracia_s: graciaMs / 1000, pc: state.pc?.connectionState });
         toast(`${state.remote.name} ha perdido la conexión con la sala. Se espera a que vuelva…`, 'warn');
       },
@@ -537,6 +566,7 @@
       Registro.anotar('bienvenida', { otro: otro.name, otro_ausente: !!otro.ausente, volvio: !!d.volvio, accion, pc: state.pc?.connectionState });
       // Si solo se cayó el canal de la sala y la llamada sigue viva, se conserva. Si no, soy el último en llegar: la inicio.
       if (accion !== 'mantener') startCall(otro, true);
+      state.remoteAusente = !!otro.ausente;
     } else {
       closeCall();
       setRemote(null);
@@ -573,6 +603,8 @@
       audio_retraso_ms: state.rec?.worklet?.startCtx && state.ctx
         ? Math.round((localNow() - state.rec.startLocal) - (state.ctx.currentTime - state.rec.worklet.startCtx) * 1000) : undefined,
       otro_graba: state.remoteStatus ? !!state.remoteStatus.recording : undefined,
+      // Lo que lleva la pista más grande: si la página muere, el último latido dice con cuánto (ver el límite de 4 GB).
+      pista_mayor_mb: state.rec ? Math.round(Math.max(0, ...state.uploaders.filter((u) => !u.finished).map((u) => u.bytesTotal)) / 1048576) : undefined,
       mic_nivel: state.micEstado || undefined,
       mic_voz_db: state.micVozDb ?? undefined,
     };
@@ -588,11 +620,23 @@
   }
 
   function sendSignal(to, data) {
-    state.signalChain = state.signalChain.then(() => fetch(`/api/rooms/${encodeURIComponent(state.room)}/signal`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      // `cid` identifica esta llamada: permite a la otra parte distinguir mensajes de una llamada anterior.
-      body: JSON.stringify({ from: state.me.id, to, data: { cid: state.callId, ...data } }),
-    })).catch((err) => console.warn('señal', err));
+    // `cid` identifica esta llamada (la de ahora, no la que haya cuando le toque salir): permite a la otra parte
+    // distinguir mensajes de una llamada anterior.
+    const body = JSON.stringify({ from: state.me.id, to, data: { cid: state.callId, ...data } });
+    // En orden, y con dos reintentos si la red falla un instante: una oferta perdida deja la llamada sin conectar.
+    const enviar = async () => {
+      for (let intento = 0; ; intento++) {
+        try {
+          const r = await fetch(`/api/rooms/${encodeURIComponent(state.room)}/signal`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+          if (r.status < 500) return;
+          throw new Error(`HTTP ${r.status}`);
+        } catch (err) {
+          if (intento >= 2) throw err;
+          await sleep(400 * (intento + 1));
+        }
+      }
+    };
+    state.signalChain = state.signalChain.then(enviar).catch((err) => Registro.anotar('senal-no-enviada', { mensaje: err.message }));
     return state.signalChain;
   }
 
@@ -610,6 +654,7 @@
     state.callId = randomId();
     state.remoteCid = null;
     if (offerer) state.rehaciendo = false;
+    state.sinConectarDesde = localNow();
     setRemote({ ...peer, stream: new MediaStream() });
     const pc = new RTCPeerConnection({ iceServers: state.iceServers });
     state.pc = pc;
@@ -635,11 +680,15 @@
       $('#remoteVideo').play().catch(() => {});
       if (e.track.kind === 'audio') connectRemoteAudio(stream);
     };
+    let antes = pc.connectionState;
     pc.onconnectionstatechange = () => {
+      if (state.pc !== pc) return;   // una llamada ya sustituida no cambia nada
       const st = pc.connectionState;
       Registro.anotar('llamada', { estado: st });
       $('#remoteState').textContent = { connected: '', connecting: 'conectando…', failed: 'sin conexión de vídeo', disconnected: 'reconectando…' }[st] ?? st;
-      if (st === 'connected') { state.rehaciendo = false; reportRoute(pc); }
+      if (st === 'connected') { state.rehaciendo = false; state.esperaLlamada = ESPERA_LLAMADA_MS; reportRoute(pc); }
+      else if (antes === 'connected') state.sinConectarDesde = localNow();   // el plazo de la vigilancia cuenta desde que se cayó
+      antes = st;
       if (st === 'failed') {
         if (state.offerer) pc.restartIce();
         toast(state.hasTurn
@@ -741,16 +790,27 @@
   }
 
   // ------------------------------------------------------------------ grabación
+  /*
+   * Formato de la grabación. Edge y Chrome, en WebM con H.264: en MP4 su grabador cierra la página cuando el
+   * archivo llega a 4 GB (unos 58 min a 1080p; así se cortaron varias grabaciones, y está reproducido con
+   * prueba-4gb.html). El WebM no tiene ese límite y el editor lo pasa a MP4 sin recodificar al importar.
+   * Safari (el iPad) sigue en MP4, que ahí no da problemas.
+   */
+  const esChromium = !isIOS && /Chrome\//.test(navigator.userAgent);
   function pickMime(kind) {
-    const video = [
+    const mp4 = [
       'video/mp4;codecs=avc1.640028,mp4a.40.2',
       'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
       'video/mp4;codecs=avc1,mp4a.40.2',
+    ];
+    const webm = [
+      'video/webm;codecs=h264,opus',
+      'video/webm;codecs=avc1,opus',
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
       'video/webm',
-      'video/mp4',
     ];
+    const video = esChromium ? [...webm, ...mp4, 'video/mp4'] : [...mp4, ...webm, 'video/mp4'];
     const list = kind === 'video' ? video : ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
     return list.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
   }
@@ -1068,7 +1128,23 @@
     // Por internet la subida puede ir más lenta que la grabación: lo pendiente queda a salvo en el dispositivo.
     const pending = state.uploaders.filter((u) => !u.finished).reduce((a, u) => a + (u.bytesTotal - u.bytesAcked), 0);
     const warn = $('#uploadWarning');
-    if (pending > 8 * 1024 * 1024 || (!state.rec && state.uploaders.some((u) => !u.finished))) {
+    // En Edge y Chrome una pista en MP4 no puede pasar de 4 GB (la página se cierra). Ya graban en WebM; si alguno
+    // solo supiera MP4, se avisa antes de llegar.
+    const grande = state.rec && state.uploaders.filter((u) => !u.finished).sort((a, b) => b.bytesTotal - a.bytesTotal)[0];
+    const limite = grande ? Llamada.avisoDeLimite({
+      bytes: grande.bytesTotal, segundos: (localNow() - state.rec.startLocal) / 1000,
+      mp4: (grande.info.mime || '').includes('mp4'), chromium: esChromium,
+    }) : '';
+    if (limite && !renderUploads.limiteAnotado) {
+      renderUploads.limiteAnotado = true;
+      Registro.anotar('limite-4gb-cerca', { pista: grande.info.kind, mb: Math.round(grande.bytesTotal / 1048576) });
+      toast(limite, 'warn', 15000);
+    }
+    if (!state.rec) renderUploads.limiteAnotado = false;
+    if (limite) {
+      warn.hidden = false;
+      warn.textContent = limite;
+    } else if (pending > 8 * 1024 * 1024 || (!state.rec && state.uploaders.some((u) => !u.finished))) {
       warn.hidden = false;
       warn.textContent = state.rec
         ? `Pendiente de subir: ${fmtBytes(pending)}. Tu conexión sube más despacio de lo que grabas; no pasa nada, se guarda en este dispositivo y se terminará de subir al acabar.`

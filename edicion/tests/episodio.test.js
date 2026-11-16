@@ -472,39 +472,6 @@ test('acabado: apto para Spotify (sin listas de edición, imagen en 0), BT.709 e
   for (let i = 0; i < antes.length; i += 1) assert.ok(Math.abs(despues[i] - antes[i]) < 1, `clic ${i + 1}: ${antes[i]} → ${despues[i]} ms`);
 });
 
-test('podcast en audio: MP3 con el mismo volumen que el vídeo, título y capítulos (sin recodificar al etiquetar)', { skip: !hayFfmpeg }, () => {
-  const dir = tmp();
-  const bruto = path.join(dir, 'bruto.mp4');
-  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=25:d=30', '-f', 'lavfi', '-i',
-    'anoisesrc=r=48000:d=30:a=0.1:c=pink', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', bruto]).status, 0);
-  const config = { ...EP.CONFIG_POR_DEFECTO, podcast: { ...EP.CONFIG_POR_DEFECTO.podcast, kbps: 128 } };
-  const mp3 = path.join(dir, 'entrega', '2026-10-10.mp3');
-  const r = EP.audioPodcast(bruto, mp3, config);
-  assert.ok(!r.error, r.error);
-  const medir = (f) => {
-    const t = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', f, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-'], { encoding: 'utf8' }).stderr;
-    return AU.leerEbur128(t);
-  };
-  const m = medir(mp3);
-  assert.ok(Math.abs(m.lufs - config.lufsEntrega) <= 1, `${m.lufs} LUFS`);
-  assert.ok(m.pico <= config.picoVerdadero + 0.5, `pico ${m.pico}`);
-  const tam = fs.statSync(mp3).size;
-  const e = EP.etiquetarPodcast(mp3, config, {
-    titulo: 'Episodio 2: Japón = sushi; #viajes', duracion: 30,
-    capitulos: [{ t: 0, titulo: 'Intro' }, { t: 12.5, titulo: 'Japón; y más' }],
-  });
-  assert.ok(!e.error, e.error);
-  assert.strictEqual(e.capitulos, 2);
-  const info = JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_chapters', '-show_entries', 'format=duration:format_tags=title,artist:stream=sample_rate,bit_rate',
-    '-of', 'json', mp3], { encoding: 'utf8' }).stdout);
-  assert.strictEqual(info.format.tags.title, 'Episodio 2: Japón = sushi; #viajes');
-  assert.strictEqual(info.format.tags.artist, 'Dos Tipos Promedio');
-  assert.deepStrictEqual(info.chapters.map((c) => [Number(c.start_time), Number(c.end_time), c.tags.title]), [[0, 12.5, 'Intro'], [12.5, 30, 'Japón; y más']]);
-  assert.strictEqual(info.streams[0].sample_rate, '44100');
-  assert.ok(Math.abs(Number(info.format.duration) - 30) < 0.2, info.format.duration);
-  assert.ok(Math.abs(fs.statSync(mp3).size - tam) < 4096, 'solo cambian las etiquetas, el audio es el mismo');
-});
-
 test('whisper: los argumentos de más de la configuración se añaden', () => {
   const TR = require('../transcribir.js');
   assert.deepStrictEqual(TR.ajustes({}).extra, []);

@@ -5,7 +5,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { slug, wavHeader, fixWavHeader, chunkDecision, extFromMime, sessionIdFromDate } = require('../lib/core');
-const { findBeep } = require('../lib/beep');
 const Clock = require('../public/js/clock');
 const { computeOffset } = Clock;
 const { parseEnv } = require('../lib/env');
@@ -53,33 +52,6 @@ test('desfase de reloj usa la muestra con menor ida y vuelta', () => {
   assert.strictEqual(r.offset, 1000);
   assert.strictEqual(r.rtt, 20);
 });
-
-function synth(sr, beepAt, noise = 0.05) {
-  const x = new Float32Array(sr * 4);
-  let seed = 1;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
-  for (let i = 0; i < x.length; i++) {
-    const t = i / sr;
-    // "voz": mezcla de tonos graves + ruido
-    x[i] = 0.2 * Math.sin(2 * Math.PI * 180 * t) + 0.1 * Math.sin(2 * Math.PI * 420 * t) + noise * rnd();
-    if (t >= beepAt && t < beepAt + 0.25) x[i] += 0.5 * Math.sin(2 * Math.PI * 1000 * (t - beepAt));
-  }
-  return x;
-}
-
-test('detecta el pitido con precisión de milisegundos', () => {
-  for (const at of [1.0, 0.437, 2.2]) {
-    const found = findBeep(synth(16000, at), 16000);
-    assert.ok(found != null, `no encontrado en ${at}`);
-    assert.ok(Math.abs(found - at) < 0.003, `esperado ${at}, obtenido ${found}`);
-  }
-});
-
-test('no confunde voz sin pitido', () => {
-  const x = synth(16000, 99);
-  assert.strictEqual(findBeep(x, 16000), null);
-});
-
 test('el reloj acumula muestras y usa la más rápida', () => {
   const t = Clock.localNow();
   Clock.addSample({ t0: t - 300, server: t + 5000 - 250, t1: t - 200 });   // rtt 100

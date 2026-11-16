@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estudio · prueba de los 4 GB</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; background: #111318; color: #eceef3; max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; }
+  button { font: inherit; padding: 10px 14px; margin: 4px 6px 4px 0; border-radius: 8px; border: 1px solid #3a3f4b; background: #1d2029; color: inherit; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  .caja { background: #1a1d25; border: 1px solid #2c303a; border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
+  .grande { font-size: 30px; font-variant-numeric: tabular-nums; }
+  .ok { color: #7ddc8a; } .mal { color: #ff8a7a; } .gris { color: #9aa1b0; }
+  canvas { width: 240px; border-radius: 6px; display: block; margin-top: 8px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>Prueba de los 4 GB</h1>
+<p>En las grabaciones largas, la página del PC se cierra cuando el vídeo llega a 4 GB. Esta prueba graba ruido a
+muchísimos bits por segundo y <strong>tira lo grabado</strong> (no guarda ni sube nada): así llega a 4 GB en unos
+minutos y se ve si el navegador aguanta, con cada formato.</p>
+<p class="gris">Hazla en el PC donde se cierra la página, con el mismo navegador. Deja esta pestaña a la vista mientras dura.
+Si la página se cierra, vuelve a abrirla: dirá con cuánto se cortó.</p>
+
+<div class="caja" id="anterior" hidden></div>
+
+<div class="caja">
+  <div id="botones"></div>
+  <button id="parar" disabled>Parar</button>
+</div>
+
+<div class="caja">
+  <div id="formato" class="gris">Sin empezar</div>
+  <div class="grande"><span id="gb">0,00</span> GB</div>
+  <div id="detalle" class="gris"></div>
+  <canvas id="lienzo" width="1920" height="1080"></canvas>
+</div>
+
+<div class="caja">
+  <strong>Resultados</strong>
+  <ul id="resultados"><li class="gris">Aún ninguno.</li></ul>
+  <p class="gris">Cuéntale a Claude lo que salga aquí (o dile que mire <code>logs/</code>: busca <code>prueba-4gb</code>).</p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const GIB = 2 ** 30;
+  const META = 4.6 * GIB;                 // se pasa de 4 GiB con margen
+  const CLAVE = 'estudio.prueba4gb';
+  const FORMATOS = [
+    { id: 'mp4', nombre: 'MP4 (como graba ahora)', tipos: ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4'] },
+    { id: 'webm-h264', nombre: 'WebM con H.264', tipos: ['video/webm;codecs=h264,opus', 'video/webm;codecs=avc1,opus', 'video/webm;codecs=h264'] },
+    { id: 'webm-vp9', nombre: 'WebM con VP9', tipos: ['video/webm;codecs=vp9,opus'] },
+  ];
+  const gb = (n) => (n / GIB).toFixed(2).replace('.', ',');
+  const leer = () => { try { return JSON.parse(localStorage.getItem(CLAVE) || '{}'); } catch { return {}; } };
+  const guardar = (d) => { try { localStorage.setItem(CLAVE, JSON.stringify(d)); } catch { /* sin almacenamiento */ } };
+  const hora = () => new Date().toTimeString().slice(0, 8);
+
+  /* Lo deja también en el registro del Estudio (logs/), por si la página muere. */
+  function anotar(ev, d) {
+    fetch('/api/rooms/prueba-4gb/log', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ peer: 'prueba', nombre: 'prueba-4gb', eventos: [{ ev, hora: hora(), d }] }),
+    }).catch(() => {});
+  }
+
+  function pintarResultados() {
+    const r = leer().resultados || [];
+    $('resultados').innerHTML = r.length ? '' : '<li class="gris">Aún ninguno.</li>';
+    for (const x of r) {
+      const li = document.createElement('li');
+      li.className = x.ok ? 'ok' : 'mal';
+      li.textContent = `${x.hora} · ${x.nombre} (${x.tipo}): ${x.texto}`;
+      $('resultados').appendChild(li);
+    }
+  }
+  function resultado(x) {
+    const d = leer();
+    d.resultados = (d.resultados || []).concat([{ hora: hora(), ...x }]).slice(-12);
+    delete d.enCurso;
+    guardar(d);
+    pintarResultados();
+    anotar('resultado', { formato: x.id, ok: x.ok, texto: x.texto });
+  }
+
+  // Una prueba que quedó a medias: la página se cerró con ella en marcha.
+  const previa = leer().enCurso;
+  if (previa) {
+    resultado({
+      id: previa.id, nombre: previa.nombre, tipo: previa.tipo, ok: false,
+      texto: `LA PÁGINA SE CERRÓ con ${gb(previa.bytes)} GB grabados${previa.bytes > 3.9 * GIB && previa.bytes < 4.1 * GIB ? ' — justo en los 4 GB: es el límite del navegador con este formato' : ''}`,
+    });
+    $('anterior').hidden = false;
+    $('anterior').className = 'caja mal';
+    $('anterior').textContent = `La prueba anterior (${previa.nombre}) no terminó: la página se cerró con ${gb(previa.bytes)} GB.`;
+  }
+  pintarResultados();
+
+  // Ruido: cuatro lienzos de ruido que se dibujan desplazados al azar. Es lo más difícil de comprimir.
+  const lienzo = $('lienzo');
+  const c = lienzo.getContext('2d');
+  const ruidos = [];
+  function prepararRuido() {
+    if (ruidos.length) return;
+    for (let k = 0; k < 4; k++) {
+      const l = document.createElement('canvas');
+      l.width = 1920; l.height = 1080;
+      const x = l.getContext('2d');
+      const img = x.createImageData(1920, 1080);
+      const a = new Uint32Array(img.data.buffer);
+      for (let i = 0; i < a.length; i++) a[i] = 0xff000000 | (Math.random() * 0xffffff);
+      x.putImageData(img, 0, 0);
+      ruidos.push(l);
+    }
+  }
+  let n = 0;
+  function dibujar() {
+    const r = ruidos[n++ % ruidos.length];
+    const dx = Math.floor(Math.random() * 64);
+    const dy = Math.floor(Math.random() * 64);
+    c.drawImage(r, -dx, -dy);
+    c.drawImage(r, 1920 - dx, 1080 - dy);
+  }
+
+  let actual = null;
+  function probar(f) {
+    const tipo = f.tipos.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+    if (!tipo) return;
+    prepararRuido();
+    const timer = setInterval(dibujar, 1000 / 30);
+    const video = lienzo.captureStream(30);
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const dest = ctx.createMediaStreamDestination();
+    osc.connect(dest); osc.start();
+    const flujo = new MediaStream([video.getVideoTracks()[0], dest.stream.getAudioTracks()[0]]);
+    const rec = new MediaRecorder(flujo, { mimeType: tipo, videoBitsPerSecond: 250000000, audioBitsPerSecond: 256000 });
+    const t0 = performance.now();
+    let bytes = 0;
+    let ultimoAviso = 0;
+    const fin = (ok, texto) => {
+      if (!actual) return;
+      actual = null;
+      clearInterval(timer);
+      try { if (rec.state !== 'inactive') rec.stop(); } catch { /* ya parado */ }
+      ctx.close();
+      resultado({ id: f.id, nombre: f.nombre, tipo, ok, texto });
+      $('parar').disabled = true;
+      for (const b of document.querySelectorAll('#botones button')) b.disabled = !b.dataset.tipo;
+      $('formato').textContent = `${f.nombre}: ${texto}`;
+      $('formato').className = ok ? 'ok' : 'mal';
+    };
+    rec.ondataavailable = (e) => {
+      if (!actual) return;
+      bytes += e.data.size;            // el trozo se tira: aquí no se guarda nada
+      const s = (performance.now() - t0) / 1000;
+      const mbps = (bytes * 8) / s / 1e6;
+      const falta = Math.max(0, (META - bytes) / (bytes / s));
+      $('gb').textContent = gb(bytes);
+      $('detalle').textContent = `${mbps.toFixed(0)} Mb/s · ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')} · faltan unos ${Math.ceil(falta / 60)} min para pasar de 4 GB`;
+      const d = leer();
+      d.enCurso = { id: f.id, nombre: f.nombre, tipo, bytes };
+      guardar(d);
+      if (bytes - ultimoAviso > 256 * 1024 * 1024) { ultimoAviso = bytes; anotar('avance', { formato: f.id, mb: Math.round(bytes / 1048576), mbps: Math.round(mbps) }); }
+      if (bytes >= META) fin(true, `pasó de 4 GB sin problema (${gb(bytes)} GB en ${Math.round(s / 60)} min)`);
+    };
+    rec.onerror = (e) => fin(false, `el grabador dio un error con ${gb(bytes)} GB: ${(e.error && (e.error.message || e.error.name)) || 'sin detalle'}`);
+    actual = { fin, bytes: () => bytes };
+    $('formato').textContent = `Probando ${f.nombre} (${tipo})…`;
+    $('formato').className = 'gris';
+    $('parar').disabled = false;
+    for (const b of document.querySelectorAll('#botones button')) b.disabled = true;
+    anotar('inicio', { formato: f.id, tipo, navegador: navigator.userAgent });
+    rec.start(1000);
+  }
+
+  for (const f of FORMATOS) {
+    const tipo = f.tipos.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+    const b = document.createElement('button');
+    b.textContent = tipo ? `Probar ${f.nombre}` : `${f.nombre}: este navegador no lo graba`;
+    b.disabled = !tipo;
+    if (tipo) b.dataset.tipo = tipo;
+    b.onclick = () => probar(f);
+    $('botones').appendChild(b);
+  }
+  $('parar').onclick = () => actual && actual.fin(false, `parada a mano con ${gb(actual.bytes())} GB (no dice nada)`);
+})();
+</script>
+</body>
+</html>

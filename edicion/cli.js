@@ -23,7 +23,6 @@ const M = require('./media.js');
 const SY = require('./sync.js');
 const MC = require('./multicam.js');
 const AN = require('./analisis.js');
-const CAL = require('./calibrar.js');
 const EP = require('./episodio.js');
 const CUT = require('./cortes.js');
 const TR = require('./transcribir.js');
@@ -244,13 +243,6 @@ function expandirArchivos(entradas) {
         .map((f) => path.join(ruta, f));
       if (!dentro.length) throw new Error(`no hay archivos de audio ni vídeo en ${ruta}`);
       salida.push(...dentro);
-
-      // Si el Estudio ya dejó una versión alineada, conviene decirlo: es mejor material.
-      const alineados = path.join(ruta, 'alineados');
-      if (isDir(alineados) && path.basename(ruta) !== 'alineados') {
-        console.log(`  nota: esta carpeta tiene "alineados" dentro. Para montar usa esa;`);
-        console.log(`        para calibrar usa esta, porque ahí el pitido ya no está.`);
-      }
     } else {
       salida.push(ruta);
     }
@@ -557,121 +549,6 @@ function cmdRender(args) {
   }
 
   if (cleanup) fs.rmSync(cleanup, { recursive: true, force: true });
-  return 0;
-}
-
-// ------------------------------------------------------------------ calibrar
-
-/*
- * Mide el retardo entre la imagen y el sonido de cada cámara.
- *
- * Es lo único que no se puede deducir comparando archivos entre sí: si la cadena de
- * grabación escribe el audio desplazado respecto al vídeo, los dos van desplazados a la
- * vez y la correlación no ve nada raro. Hace falta un suceso que esté en la imagen y en
- * el sonido a la vez. Una palmada delante de la cámara sirve; un destello de pantalla
- * que ilumine la cara, también.
- */
-function cmdCalibrar(args) {
-  if (!args._.length) {
-    console.error('uso: node cli.js calibrar <camara.mp4|carpeta> [...] [--ventana 25]');
-    console.error('  Usa la claqueta del Estudio (pitido + destello) si la hay; si no,');
-    console.error('  una palmada delante de la cámara en los primeros segundos.');
-    console.error('  Si le pasas una carpeta, mira todos los vídeos que haya dentro.');
-    return 2;
-  }
-  if (!which('ffmpeg')) throw new Error('hace falta ffmpeg');
-
-  /*
-   * Solo tiene sentido calibrar lo que tiene imagen, y además solo las cámaras: la
-   * grabación de la llamada se usa como referencia de sincronía pero no se ve en el
-   * montaje, así que su retardo no se aplica a nada. Y al ser una composición, el
-   * destello puede no estar ni en ella.
-   */
-  const archivos = expandirArchivos(args._).filter((f) => {
-    const info = M.probe(f, null);
-    if (!info.hasVideo) return false;
-    // Ojo con \b aquí: en "jc_llamada" el guion bajo es carácter de palabra, así que
-    // no hay frontera entre "jc_" y "llamada" y \bllamada\b no coincidiría.
-    if (/(^|[_\-\s.])(llamada|call|zoom|meet|reunion|teams)([_\-\s.]|$)/i.test(MC.nombreBase(f))) {
-      console.log(`  ${MC.nombreBase(f)}: es la grabación de la llamada, no una cámara; se omite.`);
-      return false;
-    }
-    return true;
-  });
-  if (!archivos.length) throw new Error('no hay ningún archivo con vídeo que calibrar');
-
-  const ventana = args.flags.ventana !== undefined ? Number(args.flags.ventana) : CAL.VENTANA_POR_DEFECTO;
-  const modo = args.flags.modo ? String(args.flags.modo) : 'auto';
-  console.log(`buscando la marca en los primeros ${ventana} s de cada archivo\n`);
-
-  const recomendaciones = [];
-  for (const file of archivos) {
-    const info = M.probe(file, null);
-    if (info.missing || info.probeFailed || !info.hasVideo) {
-      console.log(`  ${MC.nombreBase(file).padEnd(22)} no sirve: ${info.probeFailed || 'no tiene vídeo'}`);
-      continue;
-    }
-
-    const fps = info.fps || 25;
-
-    /*
-     * Si la grabación lleva la claqueta del Estudio (pitido de 1 kHz y destello de
-     * pantalla a la vez), se usa: el pitido se localiza con precisión de muestra y el
-     * destello es inconfundible. Si no hay claqueta, se recurre a buscar un golpe, que
-     * sirve para una palmada pero es menos fiable.
-     */
-    let r = null;
-    const radio = args.flags.radio !== undefined ? Number(args.flags.radio) : undefined;
-    if (modo !== 'golpe') r = CAL.calibrarClaqueta(file, { fps, ventana, radio });
-    const huboClaqueta = r && !r.error;
-    if (!huboClaqueta && modo !== 'claqueta') {
-      r = CAL.calibrarCamara(file, { fps, ventana });
-    }
-
-    if (!r || r.error) {
-      console.log(`  ${MC.nombreBase(file).padEnd(22)} ${r ? r.error : 'no se pudo medir'}`);
-      continue;
-    }
-
-    /*
-     * Tres cosas distintas pueden invalidar la medida, y conviene distinguirlas en el
-     * mensaje: que la marca no destaque, que el retardo salga fuera de lo creíble (señal
-     * de que no había marca y se confundió con otra cosa), o que simplemente se esté
-     * usando el modo de respaldo sobre material hablado, donde no es de fiar.
-     */
-    const flojo = r.confianzaVideo < 4 || r.confianzaAudio < 4;
-    const inverosimil = Math.abs(r.retardoMs) > CAL.RETARDO_MAXIMO_CREIBLE_MS;
-    const fiable = !flojo && !inverosimil && (huboClaqueta || !inverosimil);
-
-    console.log(`  ${MC.nombreBase(file)}`);
-    console.log(`    marca: ${huboClaqueta
-      ? 'claqueta del Estudio (pitido + destello)'
-      : 'sin claqueta; buscando un golpe en imagen y sonido'}`);
-    console.log(`    en la imagen: ${r.tVideo.toFixed(3)}s  ·  en el sonido: ${r.tAudio.toFixed(3)}s`);
-    console.log(`    retardo del audio: ${r.retardoMs >= 0 ? '+' : ''}${r.retardoMs} ms` +
-      `${r.incertidumbreMs ? ` (±${r.incertidumbreMs} ms: el destello solo se puede situar al fotograma)` : ''}`);
-
-    if (inverosimil) {
-      console.log(`    NO VALE: ${Math.abs(r.retardoMs)} ms es demasiado para ser latencia de captura.`);
-      console.log('    Lo que se ha encontrado no es una marca. Si la grabación es del Estudio,');
-      console.log('    usa los archivos ORIGINALES: alinear.js quita el pitido.');
-    } else if (flojo) {
-      console.log('    NO VALE: la marca no destaca lo suficiente sobre el resto.');
-    } else if (!huboClaqueta) {
-      console.log('    Ojo: sin claqueta esto es una estimación. Compruébalo antes de fiarte.');
-    }
-
-    if (fiable) {
-      const persona = MC.nombreBase(file).replace(/[_-]?(camara|camera|cam|video)\b.*$/i, '') || 'persona';
-      console.log(`    -> --audio-offset "${persona}=${r.offsetRecomendado}"`);
-      recomendaciones.push(`${persona}=${r.offsetRecomendado}`);
-    }
-    console.log('');
-  }
-
-  if (recomendaciones.length > 1) {
-    console.log(`todas juntas:  --audio-offset "${recomendaciones.join(',')}"`);
-  }
   return 0;
 }
 
@@ -1340,6 +1217,7 @@ function cmdEpisodio(args) {
   const { config } = cargada;
   mostrarConfig(cargada);
 
+  for (const n of EP.convertirWebmSueltos(r.originales)) console.log(`convertido a MP4 (sin recodificar): ${n}`);
   const partes = EP.agruparPartes(r.originales);
   if (!partes.length) throw new Error(`no hay archivos de vídeo ni audio en ${r.originales}.`);
   mostrarPartes(partes);
@@ -1622,6 +1500,8 @@ function cmdEpisodio(args) {
     const b = cmdBuild({ ...args, _: [recetaUnida], flags: { ...args.flags, out: proyecto } });
     if (b !== 0) { AU.marcarFase(r, 'error', 'no se pudo generar el proyecto'); return b; }
     fs.writeFileSync(huellaProyectoFile(r), `${huellaArchivo(proyecto)}\n`, 'utf8');
+    // Con qué cortes y ajustes se montó: si luego cambian, `estado` dice que toca montar otra vez.
+    fs.writeFileSync(path.join(r.montaje, 'config.huella'), `${AU.huellaDeMontaje(r.base)}\n`, 'utf8');
   }
   if (args.flags['solo-montaje']) {
     AU.marcarFase(r, 'montaje-listo', `${(dur / 60).toFixed(1)} min`);
@@ -1657,20 +1537,6 @@ function cmdEpisodio(args) {
   const p = M.hasFfprobe() ? M.probe(final, null) : null;
   console.log(`\nlisto para YouTube: ${final}${a.codificador ? ` (vídeo con ${a.codificador})` : ''}`);
   if (p) console.log(`  ${p.width}x${p.height} · ${p.seconds.toFixed(1)} s · ${(fs.statSync(final).size / 1048576).toFixed(0)} MB`);
-  // El episodio en audio para las plataformas de podcast: desde el bruto, con la misma medida de volumen (segundos).
-  const pc = config.podcast || {};
-  if (pc.activo !== false) {
-    AU.marcarFase(r, 'audio-podcast', 'el episodio en MP3');
-    const mp3 = path.join(r.entrega, `${nombre}.mp3`);
-    const au = EP.audioPodcast(bruto, mp3, config, a.medida);
-    if (au.error) console.log(`  aviso   no se pudo hacer el audio del podcast: ${au.error}`);
-    else {
-      // Título ya; los capítulos, si los hay, se los pone lo de YouTube (justo abajo).
-      const e = EP.etiquetarPodcast(mp3, config, { titulo: config.titulo || nombre, duracion: p && p.seconds });
-      if (e.error) console.log(`  aviso   no se pudo poner el título al MP3: ${e.error}`);
-      console.log(`listo para Spotify y demás plataformas de podcast (audio): ${mp3} (${(fs.statSync(mp3).size / 1048576).toFixed(0)} MB)`);
-    }
-  }
   // Subtítulos, capítulos y descripción, si ya están las transcripciones (las hace `analizar`). No con el proyecto
   // retocado a mano: sus tiempos ya no son los de la receta, de la que sale el mapa del montaje.
   if (usarProyecto) {
@@ -1738,17 +1604,7 @@ function cmdImportar(args) {
       return 0;
     }
     console.log(`episodio: ${r.base}\n${sesiones.length} sesión(es) del Estudio en ${estudio}, de la más antigua a la más reciente:`);
-    let sinTerminar = 0;
-    sesiones.forEach((s, i) => {
-      const meta = JSON.parse(fs.readFileSync(s.meta, 'utf8'));
-      const min = meta.stopAt && meta.startAt ? (meta.stopAt - meta.startAt) / 60000 : null;
-      const total = s.archivos.reduce((a, f) => a + f.bytes, 0);
-      console.log(`  parte ${i + 1} · sesión ${s.id} (sala ${s.sala})${min !== null ? ` · ${min.toFixed(1)} min${min < 2 ? ' (¿una prueba?)' : ''}` : ' · sin parada registrada'} · ${gb(total)} GB`);
-      for (const f of s.archivos) {
-        if (!f.completa) sinTerminar += 1;
-        console.log(`      ${f.nombre}${f.completa ? '' : '   <- SIN TERMINAR DE SUBIR'}`);
-      }
-    });
+    const { sinTerminar } = listarSesiones(sesiones);
     if (sinTerminar) {
       console.log('\naviso   hay pistas sin terminar de subir. Si alguien sigue subiendo, espera a que su página ponga');
       console.log('        «✓ Guardado en el servidor» y vuelve a importar (lo que ya esté igual se salta).');
@@ -1793,6 +1649,71 @@ function cmdImportar(args) {
   }
   console.log(`\n${accion === 'copiar' ? 'copiados' : 'movidos'} a ${r.originales}`);
   return 0;
+}
+
+/* Enseña las sesiones del Estudio (cada una es una parte) y cuenta lo dudoso: pistas a medio subir y sesiones de menos de 2 min. */
+function listarSesiones(sesiones) {
+  const gb = (n) => (n / 1073741824).toFixed(2);
+  let sinTerminar = 0;
+  const cortas = [];
+  sesiones.forEach((s, i) => {
+    const meta = JSON.parse(fs.readFileSync(s.meta, 'utf8'));
+    const min = meta.stopAt && meta.startAt ? (meta.stopAt - meta.startAt) / 60000 : null;
+    if (min !== null && min < 2) cortas.push(s.id);
+    const total = s.archivos.reduce((a, f) => a + f.bytes, 0);
+    console.log(`  parte ${i + 1} · sesión ${s.id} (sala ${s.sala})${min !== null ? ` · ${min.toFixed(1)} min${min < 2 ? ' (¿una prueba?)' : ''}` : ' · sin parada registrada'} · ${gb(total)} GB`);
+    for (const f of s.archivos) {
+      if (!f.completa) sinTerminar += 1;
+      console.log(`      ${f.nombre}${f.completa ? '' : '   <- SIN TERMINAR DE SUBIR'}`);
+    }
+  });
+  return { sinTerminar, cortas };
+}
+
+/*
+ * El arranque de un episodio en una sola orden: crea su carpeta (con la fecha de la grabación), trae las sesiones
+ * del Estudio y las analiza (transcribe y deja montaje/propuesta.md). Si hay algo que decidir (una sesión de
+ * menos de 2 min, que suele ser una prueba, o pistas a medio subir) se para antes de copiar nada y dice con qué
+ * orden seguir. Repetirlo no hace daño: lo ya copiado se salta y lo ya transcrito no se repite.
+ */
+function cmdPreparar(args) {
+  const estudio = typeof args.flags.estudio === 'string' ? args.flags.estudio : EP.ESTUDIO_POR_DEFECTO;
+  const horas = args.flags.horas ? Number(args.flags.horas) : 36;
+  const elegidas = typeof args.flags.sesiones === 'string' ? args.flags.sesiones.split(',').map((x) => x.trim()) : null;
+  let sesiones = EP.descubrirSesionesEstudio(estudio, horas);
+  if (elegidas) sesiones = sesiones.filter((x) => elegidas.includes(x.id));
+  if (!sesiones.length) {
+    console.log(`no hay sesiones del Estudio de las últimas ${horas} h en ${estudio} (--horas 72 mira más atrás).`);
+    return 1;
+  }
+  console.log(`${sesiones.length} sesión(es) del Estudio, de la más antigua a la más reciente (cada una es una parte):`);
+  const { sinTerminar, cortas } = listarSesiones(sesiones);
+  if (!elegidas && (sinTerminar || cortas.length)) {
+    console.log('\nNo he copiado nada: hay algo que decidir antes.');
+    if (cortas.length) console.log(`  · ${cortas.length} sesión(es) de menos de 2 min: ¿son pruebas?`);
+    if (sinTerminar) console.log(`  · ${sinTerminar} pista(s) sin terminar de subir: si alguien sigue subiendo, espera a su «✓ Guardado en el servidor»; si su página se cayó, vale lo que llegó.`);
+    const buenas = sesiones.filter((x) => !cortas.includes(x.id)).map((x) => x.id);
+    console.log(`Para seguir con las que valgan: node cli.js preparar --sesiones ${(buenas.length ? buenas : sesiones.map((x) => x.id)).join(',')}`);
+    AV.ponerResumen('preparar se paró: hay sesiones dudosas que elegir');
+    return 3;
+  }
+  const raiz = typeof args.flags.raiz === 'string' ? args.flags.raiz : EP.RAIZ_POR_DEFECTO;
+  // La carpeta lleva la fecha de la grabación (no la del día en que se edita).
+  const fecha = args.flags.fecha ? String(args.flags.fecha) : sesiones[0].id.slice(0, 10);
+  const r = EP.crearEstructura(path.join(path.resolve(raiz), fecha));
+  EP.escribirConfigSiFalta(raiz);
+  EP.escribirConfigEpisodioSiFalta(r.base);
+  console.log(`\nepisodio: ${r.base}`);
+  for (const x of sesiones) {
+    const res = EP.importarSesion(x, r.originales, {});
+    const cuenta = {};
+    for (const h of res.hechos) cuenta[h.accion] = (cuenta[h.accion] || 0) + 1;
+    console.log(`  ${x.id}: ${Object.entries(cuenta).map(([a, n]) => `${n} ${a}`).join(', ')}`);
+  }
+  for (const a of EP.cargarConfig(r.base).avisos) console.log(`aviso   ${a}`);
+  if (args.flags['sin-analizar']) return 0;
+  console.log('\nanalizando…\n');
+  return cmdAnalizar({ _: [r.base], flags: args.flags });
 }
 
 function cmdAnalizar(args) {
@@ -2009,13 +1930,6 @@ function paqueteYoutube(r, config, { transcribirSiFalta }) {
   const yt = config.youtube || {};
   const texto = YT.descripcion({ resumen: config.resumen, capitulos: cap.capitulos, pie: yt.pie });
   fs.writeFileSync(path.join(r.entrega, `${nombre}.descripcion.txt`), `${texto}\n`, 'utf8');
-  // Los mismos capítulos y título en el MP3 del podcast, si está (sin volver a codificarlo).
-  const mp3 = path.join(r.entrega, `${nombre}.mp3`);
-  if (exists(mp3)) {
-    const dur = CUT.duracionFrames(texto0.final) / Number(texto0.final.project.fps);
-    const e = EP.etiquetarPodcast(mp3, config, { titulo: config.titulo || nombre, capitulos: cap.capitulos, duracion: dur });
-    if (e.error) console.log(`  aviso   no se pudieron poner los capítulos al MP3: ${e.error}`);
-  }
   const faltan = [
     !config.titulo && 'el título («titulo» en el episodio.json del episodio)',
     !config.resumen && 'el resumen («resumen»)',
@@ -2032,7 +1946,7 @@ function paqueteYoutube(r, config, { transcribirSiFalta }) {
     `- Subtítulos: \`entrega/${nombre}.srt\` (YouTube Studio → Subtítulos → Añadir idioma: español → Subir archivo → «Con tiempos»)`,
     '',
     '## Spotify',
-    `- En vídeo: el mismo \`entrega/${nombre}.mp4\` (cumple lo que pide Spotify: sin listas de edición, BT.709).${config.podcast?.activo === false ? ' Spotify reparte el audio a Apple Podcasts, Amazon Music…' : ` En audio: \`entrega/${nombre}.mp3\`, con título y capítulos.`}`,
+    `- En vídeo: el mismo \`entrega/${nombre}.mp4\` (cumple lo que pide Spotify: sin listas de edición, BT.709). Spotify reparte el audio a Apple Podcasts, Amazon Music…`,
     '- La descripción sirve tal cual: Spotify también saca los capítulos de los tiempos del texto.',
     '',
     ...(faltan.length || cap.avisos.length ? ['## Pendiente', ...faltan.map((f) => `- Falta ${f}`), ...cap.avisos.map((a) => `- ${a}`), ''] : []),
@@ -2241,12 +2155,6 @@ function cmdJuntarCopia(args) {
   return 0;
 }
 
-/* `muestra` era la versión anterior de `revision`. */
-function cmdMuestra(args) {
-  console.log('(muestra ahora se llama revision)\n');
-  return cmdRevision(args);
-}
-
 // ------------------------------------------------------------------- selftest
 
 /*
@@ -2430,34 +2338,40 @@ function cmdValidate(args) {
 }
 
 function usage() {
-  console.log(`edición del podcast · proyectos de Kdenlive desde una receta, y el episodio entero
+  console.log(`edición del podcast · el episodio entero, de las grabaciones del Estudio al vídeo final
 
-  node cli.js doctor                   qué hay instalado
+el episodio, en orden (la carpeta se puede dar entera, solo con su fecha, o no darla: el más reciente):
+  node cli.js preparar                 crea el episodio, trae las sesiones del Estudio y las analiza (propuesta.md)
+  node cli.js estado                   por dónde va y cuál es el siguiente paso
+  node cli.js aprobar 1.1 2.1          pasa propuestas de corte al episodio.json del episodio
+  node cli.js episodio --solo-montaje  monta el proyecto de Kdenlive (sin renderizar)
+  node cli.js revision                 vídeo corto (480p) con cada empalme numerado, para revisar desde el móvil
+  node cli.js episodio --reanudar      renderiza, acaba y verifica: el vídeo para YouTube y Spotify
+  node cli.js youtube                  subtítulos .srt, capítulos y descripción con los tiempos del vídeo final
+  node cli.js shorts                   shorts verticales con subtítulos, de los ★ marcados al grabar (o de «shorts»)
+  node cli.js clips                    clips horizontales de unos minutos, un tema cada uno (de «clips»)
+  node cli.js limpiar                  libera disco cuando el episodio está publicado (sin --confirmar solo lo enseña)
+
+por partes, cuando hace falta:
+  node cli.js episodio nuevo [<raiz>]  solo crea la carpeta del episodio de hoy (--fecha AAAA-MM-DD)
+  node cli.js importar [<carpeta>]     solo trae las sesiones del Estudio (--copiar o --mover; --sesiones id,id;
+                                       --descargas para cogerlas de Descargas)
+  node cli.js analizar                 solo la propuesta: inicio/fin, silencios y marcas de charla técnica
+  node cli.js transcribir              solo transcribe la llamada de cada parte
+  node cli.js verificar                comprueba el vídeo final (duración, sonido, principio y final)
+  node cli.js config                   configuración efectiva del episodio y de dónde sale (--tomar-de-raiz)
+  node cli.js juntar-copia <archivo> <copia.resto-N>   junta una copia de rescate del Estudio con su archivo
+  node cli.js doctor                   qué hay instalado en este equipo
+
+recetas sueltas (un proyecto de Kdenlive que no es un episodio):
   node cli.js validate <receta.json>   revisa la receta
   node cli.js build <receta.json>      escribe el .kdenlive
   node cli.js render <receta.json>     renderiza a vídeo con melt
   node cli.js selftest                 proyecto de prueba para comprobar tu Kdenlive
   node cli.js multicam <archivos...>   monta una conversación a varias cámaras
   node cli.js ajustar-audio <receta>   mueve el audio sin repetir el análisis
-  node cli.js calibrar <camaras...>    mide el retardo imagen-sonido (claqueta o palmada)
-  node cli.js revision <carpeta>       vídeo corto (480p) con cada empalme numerado, para revisar desde el móvil
-  node cli.js youtube <carpeta>        subtítulos .srt, capítulos y descripción con los tiempos del vídeo final
-  node cli.js shorts <carpeta>         shorts verticales con subtítulos, de los ★ marcados al grabar (o de «shorts»)
-  node cli.js clips <carpeta>          clips horizontales de unos minutos, un tema cada uno (de «clips»)
-  node cli.js limpiar <carpeta>        libera disco cuando el episodio está hecho (sin --confirmar solo lo enseña)
-  node cli.js juntar-copia <archivo> <copia.resto-N>   junta una copia de rescate del Estudio con su archivo
-  node cli.js importar [<carpeta>]     trae las sesiones del Estudio a originales/ (--copiar o --mover;
-                                       --descargas para cogerlas de Descargas, --sesiones id,id para elegir)
-  node cli.js config <carpeta>         configuración efectiva del episodio y de dónde sale (--tomar-de-raiz)
-  node cli.js analizar <carpeta>       propuesta: inicio/fin, silencios y marcas de charla técnica
-  node cli.js aprobar <carpeta> 1.1    pasa propuestas a episodio.json (cortes ajustados al silencio)
-  node cli.js verificar <carpeta>      comprueba el vídeo final (duración, sonido, principio y final)
-  node cli.js estado <carpeta>         en qué fase va el proceso, en una línea
-  node cli.js transcribir <carpeta>    transcribe la llamada de cada parte (para decidir cortes)
-  node cli.js episodio nuevo <raiz>    crea la carpeta del episodio de hoy
-  node cli.js episodio <carpeta>       monta, renderiza y deja el vídeo listo para YouTube
 
-opciones:
+opciones de las recetas sueltas:
   --out <archivo>          destino (por defecto, junto a la receta)
   --doc-version 1.1|1.04   formato; por omisión, el que acepte tu Kdenlive
   --compositing <servicio> qtblend (por defecto), frei0r.cairoblend o composite
@@ -2476,18 +2390,11 @@ opciones:
   --ms <n>                 (ajustar-audio) lo mismo, sobre una receta ya hecha
   --probar "0,-33,-66"     (ajustar-audio) genera una versión por cada valor
   --persona <id>           (ajustar-audio) mover solo el audio de esa persona
-  --ventana <segundos>     (calibrar) dónde buscar la marca (25 por omisión)
-  --modo claqueta|golpe    (calibrar) forzar el tipo de marca
-  --radio <segundos>       (calibrar) cuánto mirar a cada lado del pitido (0.3)
   --audio off              (multicam) no igualar el nivel de los micrófonos
   --lufs <valor>           (multicam) nivel objetivo (-16 por omisión)
   --color off              (multicam) no emparejar el color de las cámaras
   --saturacion <x>         (multicam) saturación, 1 = sin tocar (prueba 1.1)
   --contraste <x>          (multicam) contraste, 1 = sin tocar (prueba 1.05)
-
-ejemplo:
-  node cli.js build recipes/ejemplo-vertical.json
-  node cli.js render recipes/ejemplo-vertical.json --out /tmp/prueba.mp4
 `);
 }
 
@@ -2502,15 +2409,14 @@ function main(argv) {
     selftest: cmdSelftest,
     multicam: cmdMulticam,
     'ajustar-audio': cmdAjustarAudio,
-    calibrar: cmdCalibrar,
     episodio: cmdEpisodio,
     transcribir: cmdTranscribir,
+    preparar: cmdPreparar,
     importar: cmdImportar,
     analizar: cmdAnalizar,
     aprobar: cmdAprobar,
     verificar: cmdVerificar,
     estado: cmdEstado,
-    muestra: cmdMuestra,
     revision: cmdRevision,
     youtube: cmdYoutube,
     shorts: cmdShorts,
@@ -2528,6 +2434,21 @@ function main(argv) {
     console.error(`comando desconocido: ${cmd}\n`);
     usage();
     return 2;
+  }
+  // La carpeta del episodio se puede dar entera, solo con su fecha («2026-11-15») o no darla (el más reciente).
+  if (CON_EPISODIO.has(cmd) && args._[0] !== 'nuevo') {
+    try {
+      const dada = args._[0] !== undefined && !(cmd === 'aprobar' && /^\d+\.\d+$/.test(args._[0]));
+      const carpeta = EP.resolverCarpeta(dada ? args._[0] : undefined);
+      if (dada) args._[0] = carpeta;
+      else {
+        args._.unshift(carpeta);
+        console.log(`episodio: ${carpeta}`);
+      }
+    } catch (e) {
+      console.error(`error: ${e.message}`);
+      return 1;
+    }
   }
   // Lo que puede tardar mucho: el PC no se duerme mientras corre y, si tardó, se avisa al terminar.
   const largo = COMANDOS_LARGOS.has(cmd) && args._[0] !== 'nuevo';
@@ -2548,7 +2469,9 @@ function main(argv) {
   return codigo;
 }
 
-const COMANDOS_LARGOS = new Set(['episodio', 'analizar', 'transcribir', 'render', 'revision', 'muestra', 'youtube', 'shorts', 'clips']);
+// Los comandos que trabajan sobre la carpeta de un episodio.
+const CON_EPISODIO = new Set(['episodio', 'analizar', 'aprobar', 'verificar', 'estado', 'transcribir', 'revision', 'youtube', 'shorts', 'clips', 'limpiar', 'config']);
+const COMANDOS_LARGOS = new Set(['preparar', 'episodio', 'analizar', 'transcribir', 'render', 'revision', 'youtube', 'shorts', 'clips']);
 
 /*
  * Aviso al terminar un comando largo: en Windows y, si el episodio.json del equipo tiene un tema de ntfy,
@@ -2559,7 +2482,7 @@ function avisarAlTerminar(cmd, args, codigo, fallo, segundos) {
   let config = EP.CONFIG_POR_DEFECTO;
   let nombre = '';
   try {
-    if (cmd !== 'render' && args._[0]) {
+    if (cmd !== 'render' && cmd !== 'preparar' && args._[0]) {
       const r = EP.rutas(args._[0]);
       config = EP.cargarConfig(r.base).config;
       nombre = path.basename(r.base);
@@ -2591,7 +2514,6 @@ module.exports = {
   carpetasDeKdenlive,
   cmdMulticam,
   cmdAjustarAudio,
-  cmdCalibrar,
   elegirFormato,
   ventanasDeLimpieza,
 };
