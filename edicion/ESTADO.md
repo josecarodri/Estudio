@@ -1,345 +1,44 @@
 # Estado de la edición del podcast (edicion/)
 
-Última sesión: 2026-10-08 (segunda revisión externa y entrega para Spotify; ver «Segunda revisión externa»).
+Corto a propósito: lo vigente y lo pendiente. El proceso está en el skill `/episodio`; el detalle de cada pieza, en
+`README.md`; cómo se llegó a cada decisión, en `HISTORIAL.md` (no hace falta leerlo: búscalo con `grep`).
 
-## Hecho
-- Generación de proyectos `.kdenlive` (documento 1.1, Kdenlive 26.8 detectado) y render con `melt`. El primer episodio se revisó abriéndolo en Kdenlive.
-- `multicam`: sincronía, cambio de cámara por quien habla, nivel de audio (−16 LUFS), color, guías.
-- `ajustar-audio`, `--audio-offset` por persona, `calibrar` (claqueta pitido + destello).
+Última sesión: 2026-11-16 (revisión general: estabilidad de la grabación, limpieza y edición más automática).
 
-## Sesión de prueba (dj + jc), material en `D:\Datos\Descargas\` (histórico)
-- `calibrar` midió dj −50 ms y jc +13 ms de retardo audio→imagen, y a oído pareció que hacían falta −140 ms más
-  (`dj=-90,jc=-153`). **Superado**: en el episodio real el ajuste bueno fue 0 para los dos y lo de −140 ms fue una
-  falsa alarma de VLC (ver «Resultado del primer episodio»). No se porta nada a `tools/alinear.js` del Estudio.
-- Micro↔cámara: la correlación y el pitido coinciden a ~1 ms.
-- Montaje de aquella prueba: `D:\Datos\montaje-final\`.
+## Cómo está
+- Cuatro episodios hechos con este proceso (2026-10-03, 10-10, 10-18 y 11-01). Kdenlive 26.8, documento 1.1, ffmpeg 9.
+- Todo sale de dos archivos: `<raíz>/episodio.json` (equipo) y `<raíz>/AAAA-MM-DD/episodio.json` (ese episodio).
+- Tiempos orientativos para 90 min: análisis ≈25 min, transcripción ≈10 min por hora, render ≈1 h 20 min, acabado
+  con nvenc ≈40 min. `estado` da los reales de la última vez.
 
-## Proceso semanal
-El paso a paso, con lo decidido y las trampas, está en el skill `/episodio`. En corto:
-```
-node cli.js episodio nuevo                       # crea <raiz>/AAAA-MM-DD/{originales,montaje,entrega} y su episodio.json
-node cli.js importar --copiar                    # trae las sesiones del Estudio a originales/<sesión>/
-node cli.js analizar <carpeta>                   # propuesta de cortes técnicos (y transcripción)
-node cli.js episodio <carpeta> --solo-montaje    # proyecto para revisar en Kdenlive
-node cli.js episodio <carpeta> --reanudar        # render + acabado YouTube + verificación -> entrega/
-```
-- Configuración en dos niveles: `<raiz>/episodio.json` (lo del equipo: retardo, niveles, color…) y
-  `<raiz>/AAAA-MM-DD/episodio.json` (cortes y ajustes de ese episodio). `config <carpeta>` muestra el resultado.
-- Acabado: H.264 crf 18 (x264 `medium`, o `nvenc` si se pide), highpass + compresor suave, normalizado a −14 LUFS (2 pasadas). Probado: sale a −14,2.
-- Escala: análisis de 20 min sintéticos en 26 s (≈80 s por hora). Prueba real de 36 s: 85 s en total. El render de 1 h no está medido.
-- Opciones: `--solo-montaje` (hasta el .kdenlive), `--sin-acabado`.
-
-## Primer episodio real (2026-10-03)
-- Carpeta de trabajo: `D:\Datos\Videos\Dos Tipos Promedio Podcast\Episodios\2026-10-03\` (originales, montaje, entrega, pruebas).
-- Dos sesiones por reconexiones: parte 1 (~58 min, archivos `(1)`) y parte 2 (~39 min, archivos `(2)`).
-- `calibrar` por claqueta NO es fiable entre sesiones: jc dio +13 (prueba), −75 (parte 1) y +121 ms (parte 2). No hubo palmada.
-  El retardo se elige a oído con clips cortos (`pruebas/`), con `ajustar-audio --probar`.
-- La cámara de dj va a 29,97 fps y la de jc a 60.
-- Mic de dj muy bajo (−33,9 LUFS, +17,9 dB de ganancia): vigilar el ruido.
-- Parte 2: los primeros ~20 s de dj_camara salen sin la luz de frente; hay que cortarlos.
-- Parte 1: lo del agua está al inicio. Jc habla de 1:18 a 2:01, hay silencio hasta 2:44 y respuestas cortas hasta ~3:01. Corte propuesto 1:15–3:01, SIN confirmar.
-- El llanto de la hija no se trabaja por ahora.
-
-## Resultado del primer episodio (2026-10-03)
-- Entregado: `entrega/2026-10-03.mp4`, 93,9 min, 1080p, −14,1 LUFS. Revisado por Jose: audio y vídeo bien.
-- Retardo de audio: se dejó en 0 para los dos (elegido a oído con clips cortos). Medido: no hay deriva entre WAV y MP4 (1 ms en una hora) y el acabado no mueve el audio (1–2 ms).
-- Falsa alarma: en VLC se vio el audio atrasado, y en otro reproductor estaba bien. No fue el archivo.
-- Fallo corregido: el render largo moría hacia los 9000 frames porque `spawnSync` limitaba la salida de melt a 1 MB; ahora va a un archivo y el límite de tiempo es de 8 h.
-- El render de 94 min tardó ~1 h 20 min; el análisis de las dos partes, ~25 min. `--reanudar` salta el análisis.
-
-## Cortes y partes (nuevo)
-- `episodio` agrupa los archivos en partes y monta cada parte por separado, con su retardo. Al principio se agrupaba
-  por el `(n)` que pone el navegador; desde el 2026-10-06, por sesión del Estudio (ver abajo).
-- `episodio.json`: `silencios` (recorta los de 4 s o más dejando 1 s), `cortes` generales y `partes: { "1": { audioOffset, desde, hasta, cortes } }`.
-  Los tiempos de los cortes son segundos del reloj de la llamada (`"2:02"`, `"1:15"`).
-- Los cortes se aplican en la receta (`cortes.js`), así que el `.kdenlive` sale ya cortado. Las partes se unen en `montaje/episodio.json`.
-- El análisis de volumen de 1 h de audio es lento (varios minutos por parte).
-
-## Edición con transcripción y retoques (2026-10-04/05)
-- **Versión final del episodio** (`entrega/2026-10-03.mp4`, 89,8 min, −14,1 LUFS, color suave): sustituye a la primera. Verificado con transcripción del vídeo ya renderizado (principio y final). Copia del proyecto aprobado: `montaje/episodio-APROBADO.*`.
-- **Whisper local** (`transcribir.js`, comando `transcribir <carpeta>`): whisper.cpp v1.9.2 con CUDA 12.4 y modelo `large-v3-turbo-q5_0`, en `D:\Datos\Herramientas\whisper`. ~10 s por minuto de audio en la GTX 1650 con `-fa`. Deja `montaje/transcripcion-parte-N.txt/.json`.
-  - ¡Ojo! Los tiempos de Whisper pueden ir hasta ~0,5 s desfasados al final de las frases (p. ej. un «Gracias» suelto). Para cortes finos, medir la energía del micro en vez de fiarse del texto.
-  - Al inicio, el pitido de la claqueta (1,00–1,25 s) se transcribe como «Bienvenidos»: es un artefacto. La voz real empezó hacia 2,6 s.
-- **Opciones nuevas de `episodio.json` por parte**: `desde`/`hasta`, `cortes`, `limpiezas` (IA RNNoise + puerta de ruido en un micro, en un tramo; modelo en `D:\Datos\Herramientas\rnnoise\sh.rnnn`), `insertar` (copia un tramo antes de un instante), `alFinal`, `mantenerPlano` (fija una cámara en un tramo para evitar ráfagas de cambios).
-- **`--recortar`**: reutiliza el reparto de cámaras y solo reaplica cortes (segundos en vez de ~25 min). No vale si cambia `desde`, `hasta` o el retardo de audio (hay que borrar `parte-N/multicam.json` de esa parte).
-- **Color** (`color` en la config, apagable con `activo:false`): curva casi plana, saturación 1,05, vibrance 0,18. Elegido por Jose entre varias; una versión más fuerte «se veía rara».
-- **`muestra <carpeta>`**: vídeo corto con los empalmes y el color, sin renderizar todo (sin usar en el episodio final).
-- **Llanto de fondo bajo la voz**: la puerta de ruido sola no basta (solo actúa en los silencios); RNNoise + puerta mejoró «mucho» según Jose.
-- Mic de Douglas muy bajo (+18 dB de ganancia automática): si se oye ruido, activar `quitarRuido` (sin probar).
-- Cuidado al escribir scripts: en este entorno se pierden barras invertidas en heredocs de bash y en algunos `Write`; usar la herramienta `Edit` para código con regex.
-
-## Automatización del proceso (2026-10-05)
-Objetivo: no volver a empezar de cero cada semana. Procedimiento y decisiones fijas en el skill `/episodio` y en la memoria.
-- `analizar <carpeta>`: ~20 s (+ transcripción en segundo plano). Mide inicio/fin de voz (pitido de claqueta + energía), silencios ≥4 s y **marcas de charla técnica** («se perdió la conexión», «lo cortamos», «sí se escucha», «no tengo luz»…), más cambios de brillo al inicio de cada cámara. Escribe `montaje/propuesta.md/.json`. Probado en el episodio real: detecta exactamente los 4 eventos técnicos que se encontraron a mano y ninguna falsa alarma. **No propone contenido** (tangentes, partes flojas): lo decide el usuario.
-- `aprobar <carpeta> 1.1 2.1`: pasa propuestas a `episodio.json` (desde el 2026-10-06, al del episodio) con los extremos ajustados al silencio más cercano.
-- Cortes **por texto** en `episodio.json`: `{"desde":"frase","hasta":"frase","incluirHasta":false,"despuesDe":"10:00","ordinal":2}` (se quita desde el principio de la primera frase hasta el principio de la segunda). Evita calcular tiempos a mano y el desfase de Whisper.
-- `desde`/`hasta` en `"auto"` (valor por defecto): empieza 0,25 s antes de la primera voz tras el pitido y acaba 0,25 s tras la última antes del pitido de cierre; si no hay pitido de cierre (grabación cortada) no recorta el final. Suelo de ruido por percentil 5 (robusto con un monólogo).
-- Huella por parte (`parte-N/huella.txt`): si no cambian archivos ni `desde/hasta/audioOffset/minShot/lufs`, no se repite el análisis de ~25 min. `--rehacer` lo fuerza, `--recortar` lo evita siempre.
-- `episodio` escribe `montaje/estado.json`; `estado <carpeta>` lo resume en una línea (y avisa si el proceso murió). Evita vigilantes largos, que caducan.
-- `verificar <carpeta>` (y al final de `episodio`, salvo `--sin-verificar`): duración, formato, −14 LUFS, sin pitidos, la voz no entra «a medias», y comparación por transcripción del principio y del final. Probado sobre el vídeo real: 8/8 ✔.
-- `importar [<carpeta>] [--mover]`: trae de Descargas los archivos del Estudio de las últimas 36 h (desde el 2026-10-06 los coge directamente del Estudio; Descargas queda con `--descargas`). `episodio nuevo` sin ruta usa `EP.RAIZ_POR_DEFECTO`.
-- Pruebas: `tests/auto.test.js` (12) con audio sintético para los límites por voz.
-
-## Tramos retomados (2026-10-05)
-- Si la página de jc se cae y retoma, el Estudio genera `jc-2_camara/audio`. `multicam` los agrupa con `jc` (`personaBase`): el montaje cubre desde el primer archivo hasta el último de cada persona (el hueco no recorta), los micros de jc y jc-2 comparten pista (`buildRecipe`), el color cuenta a cada persona una vez y `--audio-offset` de `jc` vale para `jc-2`.
-- Probado con una sesión sintética (`SESION.retomar`); **sin material real todavía**. Desde el 2026-10-06 `limpiezas` y `mantenerPlano` también valen para `jc-2`, y la llamada partida se une (ver abajo).
-- El Estudio vive ahora en su propio repo (`josecarodri/Estudio`, `C:\Users\Carlos\Estudio`). Desde el 2026-10-06 la edición también (ver abajo).
-
-## Revisión del montaje y del Estudio (2026-10-06)
-Revisión completa del proceso buscando lo que podía romperse en el próximo episodio. Lo que se cambió:
-- **Configuración por episodio.** Los cortes del primer episodio estaban en `Episodios\episodio.json` (la raíz) y se
-  habrían aplicado también al siguiente. Ahora se lee por capas: valores por defecto → raíz (solo lo del equipo) →
-  `AAAA-MM-DD\episodio.json` (`cortes`, `partes`, `limpiezas`, `mantenerPlano`, `insertar`, `alFinal` y un
-  `desde`/`hasta` que no sea `auto`). Lo de un episodio que quede en la raíz se ignora con aviso;
-  `config <carpeta> --tomar-de-raiz` lo pasa a su episodio (antes guarda una copia de la raíz). `aprobar` escribe en el
-  del episodio y `episodio nuevo` lo crea vacío.
-- **Partes por sesión.** `importar` coge las sesiones directamente de `C:\Users\Carlos\Estudio\grabaciones` (otra
-  carpeta: variable `GRABACIONES_DIR`, la del servidor, o `--estudio`), en orden de grabación, cada una a `originales/<sesión>/` con
-  su `session.json`. Opciones: `--copiar`/`--mover`, `--sesiones id,id`, `--horas`; Descargas sigue con `--descargas`.
-  Al agrupar manda la subcarpeta o el prefijo de sesión del nombre; sin eso, el k-ésimo archivo de cada nombre (el
-  `(n)` del navegador) es la parte k, con aviso. `episodio` enseña las partes y lo que se quedaría fuera **antes** del
-  análisis largo.
-- **Llamada partida** (`llamadas.js`). Si se cae la página que graba la llamada (la del PC), quedan `jc_llamada` y
-  `jc-2_llamada`. Se unen en `montaje/parte-N/llamada-unida.wav` colocando cada tramo por correlación con la
-  grabación continua de la otra persona (su cámara o su micro, la de más confianza, mínimo 5) o, si no, por el
-  `startedAtServer` de `session.json`; `llamada-unida.json` dice cómo se colocó. Esa llamada es el reloj de la parte para todo: cortes, limpiezas, silencios y transcripción.
-  `analizar` marca el hueco como caída.
-- **Silencios confirmados en los micros.** Un silencio de la llamada solo se corta si los micros también callan
-  (umbral: suelo de ruido + 20 dB, como poco −55 dB; más de 1 s de voz lo salva). Sin esto, un hueco de la llamada
-  con alguien hablando se habría quitado.
-- **Limpiezas** en segundos de la llamada, como los cortes, y también sobre `jc-2`. El WAV limpio lleva la parte y
-  una firma de los tramos (`montaje/audio/parte-N-<micro>.limpio-<firma>.wav`): se rehace solo si cambian.
-- **Proyecto retocado en Kdenlive.** `episodio` guarda la huella del `.kdenlive` que genera; si después se guardó en
-  Kdenlive, se para (código 4) en vez de pisarlo. `--reanudar --usar-proyecto` renderiza ese proyecto (y `verificar`
-  ya no compara la duración con la receta); `--descartar-cambios` lo rehace y guarda copia (`episodio.kdenlive.editado-…`).
-- **Acabado más rápido.** x264 `medium` en vez de `slow`: medido 12,3 s frente a 21,3 s en la misma prueba, con un
-  archivo un 2,2 % mayor (YouTube lo vuelve a codificar). `"codificador": "nvenc"` opcional, con vuelta a x264 si
-  falla. También medido: melt no se salta fotogramas aunque vaya más lento que el tiempo real (700 de 700
-  distintos), y `real_time=-2/-4` solo ganaba ~15 %: no se adoptó.
-- **Color.** En archivos de más de ~7 min la muestra para emparejar cámaras empieza en el minuto 1: en los primeros
-  segundos la exposición aún se está ajustando.
-- **Grabación** (el Estudio): una página que pierde la orden de grabar o de parar se corrige sola en ≤5 s (sus pistas
-  llevan `tarde: true`); «● REC» / «⚠ NO ESTÁ GRABANDO» sobre la imagen del otro; se borra de IndexedDB lo ya subido;
-  si falla una escritura en el servidor, el archivo vuelve al último trozo bueno; las descargas llevan la sesión
-  delante; `alinear` coloca bien los tramos sin pitido de inicio. Detalles en el `CLAUDE.md` de la raíz.
-- Pruebas nuevas: `tests/episodio.test.js`, `tests/llamadas.test.js` y casos en `kdenlive.test.js` y `auto.test.js`
-  (llamada partida sintética de 60 s, guarda del proyecto, silencios confirmados, partes por sesión).
-
-## Todo en un repo, solo Kdenlive (2026-10-06)
-- La edición estaba en el repo `Personal` (hoy `Finanzas`; `tools/kdenlive-claude`), mezclada con la app de finanzas. Ahora vive aquí,
-  en `edicion/`, junto a la grabación: todo lo del podcast en un solo repo. En el PC se trabaja desde
-  `C:\Users\Carlos\Estudio\edicion` y Claude Code se abre en `C:\Users\Carlos\Estudio` (ahí están el skill `/episodio` y el `CLAUDE.md`).
-- Las grabaciones se importan por defecto de `grabaciones/` de este mismo repo: ya no hay ruta fija del PC en el código.
-- **Solo Kdenlive.** Se quitó la herramienta de DaVinci Resolve (`resolve-claude`): la versión gratuita solo admite
-  scripts lanzados a mano desde dentro del programa, y con Kdenlive se monta y se renderiza sin abrirlo, que es lo que
-  funciona. La validación de recetas, que venía de ella, es ahora propia (`recipe.js`, pruebas en `receta.test.js`).
-- Pruebas: `npm test` en la raíz pasa las de la grabación y las de la edición; `npm run test:edicion`, solo estas.
-
-## Marcas en vivo, saltos disimulados, revisión desde el móvil y avisos (2026-10-06)
-- **Marcas en vivo** (Estudio + `analizar`): botones ✂ y ★ mientras se graba (teclas C y B en el PC). ✂ es un tramo
-  que se abre y se cierra (lo cierra cualquiera; si no, al parar); ★ un instante. El servidor las guarda en
-  `session.json` (`marcas`, hora del servidor) y avisa a las dos páginas. `analizar` las pasa al reloj de la llamada
-  con el `startedAtServer` de cada tramo de la llamada (y `llamada-unida.json` si está partida): los ✂ de 3 s o más
-  son propuestas aprobables (empiezan 1 s antes de la pulsación), los ★ y los ✂ más cortos salen en listas con lo
-  que se dijo justo antes. `episodio` las pone como guías (★ verde, ✂ sin cortar rojo) y avisa de los ✂ sin cortar.
-  `aprobar` deja una nota en el corte (tercer elemento: `[desde, hasta, "1.2 ✂ en vivo: marcado por JC"]`).
-- **Saltos de imagen** (`CUT.disimularSaltos`, config `disimularCortes`): en cada empalme con la misma persona a los
-  dos lados se pone 1,5 s la cámara del otro justo después, en sincronía (en la receta sin cortar), y se absorben los
-  planos de menos de 0,6 s junto a un corte. También en la unión de dos partes. Comprobado renderizando: el contador
-  de la cámara de dj salta de 37 a 42 detrás del plano de jc. Respeta `mantenerPlano` y no usa una cámara sin imagen
-  (mira su duración con ffprobe).
-- **Guías de los cortes**: cada empalme lleva «✂ motivo (−N s)» (silencio, texto, propuesta aprobada, corte a mano).
-- **Revisión desde el móvil** (`revision`, sustituye a `muestra`): `montaje/revision.mp4` en 480p con un trozo por
-  empalme (numerado, motivo encima, barra roja en el corte) más principio, final y uniones de partes, y
-  `montaje/revision.md`. Sin silencios salvo `--silencios`. Trozos de melt y rotulados guardados con huella: repetirla
-  sin cambios tarda menos de 1 s.
-- **PC despierto y avisos** (`avisos.js`): los comandos largos piden a Windows no suspender (SetThreadExecutionState
-  desde un PowerShell que se cierra al terminar el proceso) y, si tardaron 60 s o más, avisan: notificación de Windows
-  y, con `avisos.ntfy`, en el móvil. Los scripts de PowerShell se comprobaron con su analizador y la definición de C#
-  compila; falta verlos en el PC.
-- Pruebas nuevas: `tests/marcas.test.js` (servidor), avisos y textos en `tests/llamada.test.js`, y en `edicion/tests`:
-  `revision.test.js`, `avisos.test.js`, saltos en `cortes.test.js`, marcas en `auto.test.js` y de punta a punta en
-  `kdenlive.test.js` (analizar con marcas, episodio con salto disimulado, guías y revisión).
-
-## YouTube, cámaras, plano doble, rótulos, shorts y disco (2026-10-06)
-- **YouTube** (`youtube.js`, `youtube`): el «mapa del montaje» traduce la transcripción de cada parte al vídeo final
-  comparando dónde empieza cada micro en `parte-N/multicam.json` (in − at de cada micro) con dónde quedó cada trozo en
-  `montaje/episodio.json`: lo cortado no sale, lo repetido (`alFinal`, `insertar`) sale dos veces, y no hace falta
-  transcribir el vídeo final. Subtítulos de 2 líneas de 42 caracteres (mejor partidas tras un punto), `indice.md` para
-  elegir capítulos sin leer la transcripción, capítulos por frase (siguen bien si cambian los cortes) y avisos con las
-  reglas de YouTube. `episodio` lo hace solo al final si ya hay transcripciones.
-- **Cámara congelada / en negro / sin imagen** (`camaras.js` + `CUT.cubrirCamaras`): ffmpeg `fps=5,scale=160`,
-  `freezedetect=n=0.0003:d=1` (los trozos a menos de 0,6 s se juntan: cada imagen clave parte una congelación) y
-  `blackdetect`; «sin imagen» si el vídeo acaba 2 s o más antes que el archivo. ≈3 min por hora de vídeo, guardado en
-  `montaje/camaras.json`. Medido: un hueco sin imágenes (lo que deja una cámara colgada) da exactamente 0 y se detecta
-  exacto; la misma imagen repetida a 10 Mb/s se detecta casi entera (el compresor la afina un poco al principio); una
-  imagen quieta con ruido de cámara a esa calidad no da falsos positivos, pero a calidad baja (CRF 23 en 320x180) sí:
-  el compresor se come el ruido. Se cubre con la otra cámara antes de copiar tramos y de disimular saltos (con vetos).
-  Las cámaras de las sesiones falsas de las pruebas se mueven todas (antes la de jc era una carta de ajuste fija).
-- **Plano doble** (`CUT.planoDoble`, `planoDoble`): 3 o más planos seguidos de menos de 2,5 s → los dos a la vez, zoom
-  0,5 y ±ancho/4 (jc a la izquierda, V1; el otro en V2). Las funciones de planos (`planosDeVideo`) solo miran V1.
-- **Rótulos** (`rotulos.js`, `rotulos.nombres`, por defecto «JC» y «DJ»: lo eligieron ellos): QuickTime Animation (qtrle, argb) con `drawtext` en caja y fundido
-  de alfa, en V3, en el primer plano de cada uno solo en que quepa. Las entradas de cada pista tienen que ir en orden
-  de tiempo (si no, el montaje las toma por solapes): se ordena `edit` por `at`.
-- **qtblend necesita pantalla en Linux**: el módulo Qt de MLT 7.22 no carga sin X11 (tampoco con
-  `QT_QPA_PLATFORM=offscreen`), y sin él el reencuadre no se aplica al renderizar (el `.kdenlive` está bien). En Linux
-  sin pantalla, melt se ejecuta con `xvfb-run -a` si está (`media.comandoMelt`). En Windows no pasa.
-- **Shorts** (`shorts.js`, `shorts`): receta 9:16 del montaje final; zoom para llenar el alto = alto·(16/9)/ancho
-  (3,16 con 1080x1920, medido: con 1,78 queda una franja); plano doble arriba/abajo (zoom 1,58, tilt ±alto/4). Por ★:
-  40 s antes y 8 después, ajustado a frases (el inicio solo se adelanta hasta 2 s, al menos 5 s, como mucho 60).
-  Subtítulos ASS (22 caracteres por línea) y −14 LUFS con ffmpeg.
-- **Clips** (`clips.js`, `clips`, 2026-10-10): horizontales de 1 a 20 min, un tema cada uno, recortados del vídeo
-  final de `entrega/` (ya con color y sonido: no se repite el acabado), con fundido 0,3/0,5 s, `.srt`, imagen para la
-  miniatura y descripción con «▶ Episodio completo» (`enlace` del episodio). `hasta` por frase acaba antes de ella.
-- **Aviso de micro bajo** (Estudio, `Llamada.nivelDelMicro`): nivel cada 100 ms de los últimos 20 s; voz = lo que pasa
-  de 12 dB sobre el ruido de fondo; «bajo» si su percentil 90 no llega a −32 dBFS, «satura» con 3 picos a 0 dBFS.
-  Comprobado en Chromium con un micro falso a −42 dBFS.
-- **Tiempos y disco**: `estado` dice lo que tardó cada fase la última vez (historial en `estado.json`). Render con
-  `real_time=-2` (2 fotogramas a la vez): 18,6 → 13,3 s en la prueba de 720p, idéntico (PSNR inf); con -4 no mejora en 4
-  núcleos. Presets más rápidos para el bruto no compensan (−10-15 % y ×2-×3 de tamaño). `limpiar` (sin `--confirmar`
-  solo enseña; con el episodio listo).
-
-## Revisión externa (2026-10-06)
-Otra IA revisó `main` (561cbcb) y encontró cuatro fallos; los cuatro se reprodujeron y se arreglaron, cada uno con su prueba
-(que falla con el código de antes):
-- **Alineador (`tools/alinear.js`) y tramos retomados**: buscaba el pitido de inicio en los primeros 20 s de cada pista;
-  si alguien volvía poco antes de parar, encontraba el de CIERRE y recortaba y adelantaba el tramo al principio. Ahora,
-  en una pista que empezó después del pitido de inicio (`retomada`, `tarde`, o su `startedAtServer`), no se busca: la
-  sitúa el pitido de cierre (exacto; la hora de los metadatos lleva el retraso de la red) o, si no lo hay, los metadatos.
-- **Sin WAV de alguien** (`multicam.buildRecipe`): se anunciaba que se usaba el audio de la cámara, pero solo para elegir
-  plano; en el montaje esa persona quedaba muda. Ahora su cámara va también como audio continuo (`video: false`),
-  igualado a −16 LUFS como un micro.
-- **«Descargar copia» sin IndexedDB** (`public/js/uploader.js`): los trozos en memoria se sueltan al subirse y la copia
-  salía vacía o sin principio. Ahora `copia()` da el archivo entero si está todo, avisa si ya está todo en el servidor, o
-  da el resto con la cabecera del vídeo (el primer trozo ya no se suelta) y el nombre `…resto-<bytes en el servidor>`;
-  `juntar-copia` lo pega exacto detrás de lo del servidor (sin repetir lo que el servidor llegó a tener; con un hueco, no
-  junta). El editor no toma esas copias por otra cámara. Comprobado en Chromium sin IndexedDB.
-- **Turnos con micros desequilibrados** (`multicam.detectTurns`): comparaba niveles absolutos, y un micro bajo no ganaba
-  nunca al ruido de uno alto. Ahora cada micro se mide respecto a su nivel típico de voz (percentil 90 de lo que pasa del
-  ruido, aunque hable poco: si no, una interrupción corta suya contaba como muy fuerte).
-
-## Comprobación en el PC (2026-10-06, noche)
-- `doctor`: ffprobe, ffmpeg 9.0.2, melt y Kdenlive 26.8 (documento 1.1, composición qtblend). Whisper y RNNoise en
-  `D:\Datos\Herramientas`. El repo es un clon de git al día y la raíz de `Episodios` ya estaba limpia (el
-  `--tomar-de-raiz` se hizo a las 20:19: queda `episodio.json.copia-20261006-201940`).
-- **Avisos y modo despierto no funcionaban en Windows**: el PowerShell aparte se lanzaba con `detached`, y así
-  PowerShell 5.1 se cierra en ~0,1 s sin ejecutar nada (los fallos se callan a propósito, por eso no se notaba). Ahora
-  va sin `detached`: sigue vivo y `SetThreadExecutionState` responde bien.
-- **La notificación moría con node**: sin `detached`, libuv mete al hijo en su job (KILL_ON_JOB_CLOSE) y muere al
-  terminar node, y la notificación dura 20 s. Ahora (`powershellQueSobrevive`) el hijo la lanza en un nieto con
-  `Start-Process`, que no queda en el job (SILENT_BREAKAWAY_OK). Trampa: el hijo tiene que ir con `ref()`; con `unref`
-  nada mantenía vivo a node, salía al instante y el job mataba al hijo antes de lanzar al nieto. node espera así ~5 s
-  al terminar (lo que tarda PowerShell en arrancar). Comprobado: la notificación sigue viva 10 s después de salir node.
-  El modo despierto sigue con el hijo directo: debe morir con node. Pruebas en `avisos.test.js` (solo en Windows) que
-  fallan sin el nieto y sin el `ref()`.
-- **Las pruebas de render se saltaban en Windows**: buscaban melt en el PATH, y el de Kdenlive no está ahí. Ahora usan
-  `buscarBinario` como el programa: las 4 corren y pasan en el PC.
-- **nvenc medido** en la GTX 1650 con 3 min del episodio (minuto 20) y el color puesto: x264 `medium` 238 s (1,3 veces
-  el tiempo real: ≈2 h por episodio), nvenc 79 s (≈40 min); de esos 79 s, 67 son el filtro de color. Con `-cq` = crf + 1
-  salía un 62 % más pesado; con crf + 4 (ahora el valor), mismo tamaño (204 frente a 194 MB) y misma SSIM (0,9885 frente
-  a 0,9890). Jose vio las dos versiones y se ven bien las dos: **`"codificador": "nvenc"` puesto en el `episodio.json`
-  del equipo** (copia de antes: `episodio.json.copia-20261006-nvenc`). Ahorra ≈1 h 20 min por episodio.
-
-## Segunda revisión externa (2026-10-08)
-Codex revisó `main` (9803577) y señaló seis fallos. Los seis se reprodujeron y se arreglaron, cada uno con una prueba que
-falla con el código de antes:
-- **Servidor: trozo confirmado sin apuntar** (`server.js`, subida). Si se guardaba el trozo pero fallaba escribir el
-  progreso (`.…seq`), el reintento recibía «repetido» y la página lo daba por subido; tras reiniciar el servidor, ese
-  trozo se quitaba del archivo. Ahora solo se confirma cuando están el trozo y el progreso; si falla lo segundo, se
-  quita el trozo y el reintento lo guarda de verdad. El progreso se escribe aparte y se renombra (nunca a medias), con
-  reintentos si Windows lo tiene abierto un instante; y si algo quedó de más en el archivo, se quita antes de añadir.
-- **`juntar-copia` dentro de `originales/`**: el de antes quedaba como `jc_camara.sin-resto.mp4` y el montaje lo tomaba
-  por otra persona («jc-sin-resto»), con su audio repetido. Ahora va a `.respaldos/` junto al archivo (una segunda copia
-  no pisa la primera: `…sin-resto-2…`) y, aunque alguien lo deje suelto, `analizarNombre` lo reconoce y no lo usa.
-- **`verificar` daba ✔ sin comprobar**: si no se podía sacar el audio, salía «✔ sin pitidos». Ahora cada línea es ✔, ✘ o
-  «? sin comprobar» (cuenta aparte: `sinComprobar`); y se comprueba el pico verdadero contra `picoVerdadero` (con 0,5 dB
-  de margen por el AAC; un acabado real da −1,2).
-- **Audio limpio desactualizado**: la firma del WAV limpio solo miraba la ruta y los tramos. Ahora incluye tamaño y fecha
-  del micro original (p. ej. tras juntarle una copia), los filtros y el modelo de RNNoise; y se escribe aparte y se
-  renombra (uno a medias ya no se reutiliza).
-- **Ajustes por parte ignorados**: `partes.N.minShot` y `lufsMicros` cambiaban la huella pero el motor recibía los
-  generales. Ahora todo lo de dentro de la parte (también `silencios`, `camaras`, `disimularCortes`, `planoDoble`) sale
-  de su configuración, mezclada campo a campo (`partes.2.silencios.min` ya no borra el resto de `silencios`).
-- **Plano mínimo incumplido** (`detectTurns`): el corte se colocaba hacia atrás, donde empezó a hablar el otro, y una
-  frase de 1 s dejaba un plano de 1 s con mínimo de 2. Ahora el corte va donde empezó a hablar salvo si así el plano no
-  llega al mínimo; entonces, al cumplirlo. La huella del reparto sube a v2 (se rehace el análisis una vez).
-
-Además, buscando calidad y tiempo:
-- **Color del acabado** (medido aquí en 1080p con ffmpeg 6.1): ffmpeg convertía YUV→RGB→YUV→RGB→YUV por fotograma
-  (curves y vibrance en RGB, eq en YUV en medio). Con eq delante, 2 conversiones: el filtro tarda un 45 % menos
-  (6,9 → 3,8 s en la prueba) y la imagen sale igual (PSNR 59,8 dB; un LUT 3D se probó y era más lento). En el PC, donde
-  el color era 67 de los 79 s de la prueba de nvenc, debería bajar el acabado de ≈40 a ≈25 min (sin medir allí).
-- **Matriz de color**: el render de melt va etiquetado BT.709; ffmpeg pasaba a RGB con BT.709 y volvía con BT.601 (la de
-  por defecto), y el vídeo salía sin etiqueta: colores un poco desplazados (piel algo más cálida, rojos más intensos).
-  Ahora las dos conversiones dicen su matriz y la salida va etiquetada BT.709. Medido: el mismo vídeo con y sin etiqueta
-  da el mismo resultado. **Puede verse un poco distinto de los primeros episodios** (más fiel a la cámara).
-- **Spotify** (sus especificaciones de vídeo: sin listas de edición, primera imagen a ≤ 50 ms, BT.709): el MP4 de
-  ffmpeg llevaba listas de edición. Ahora va sin ellas (`-use_editlist 0` y tiempos negativos en los B); el silencio
-  inicial del AAC (1024 muestras) se compensa recortando lo mismo del principio. Medido con clics: el sonido cae exacto
-  con la imagen (< 1 ms), igual que antes. `verificar` lo comprueba.
-- **Audio del podcast**: `entrega/<fecha>.mp3` (44,1 kHz, 192 kbps, mismo sonido y volumen que el vídeo, desde el bruto)
-  con título, autor y los capítulos de YouTube (CHAP de ID3, sin recodificar). Config del equipo: `podcast`.
-- **Shorts** con el color y el compresor del episodio (antes salían sin color).
-- **Tiempos por paso** en el análisis del montaje (audio de cada archivo, nivel de cada micro, color): para saber en el PC
-  dónde se van los ~25 min antes de optimizar nada. El audio no es: aquí, 30 min de WAV se analizan en ~3 s + 4,5 s.
-- `melt` instalado en el entorno de pruebas: las 4 pruebas de render ya corren también aquí (303 pruebas, 0 fallos).
-
-## Bip al final del episodio del 2026-10-10 (2026-10-14)
-- Síntoma: el vídeo publicado acaba con ~0,24 s del pitido de cierre. Causa: el `episodio.json` del equipo tenía
-  `"hasta": null`, que anulaba el `"auto"` por defecto; la parte 2 no se recortó por el final y acabó en el pitido
-  (la última voz estaba 3,4 s antes). La parte 1 llevaba un `hasta` explícito y no se vio afectada.
-- Arreglado: se quitó `hasta` del `episodio.json` del equipo (copia: `episodio.json.copia-20261014-hasta`);
-  `resolverLimites` avisa con ⚠ si `hasta` es null; `verificar` busca pitidos desde 0,06 s (antes 0,15 s, y este
-  se le escapó). Prueba nueva en `auto.test.js`. El vídeo ya publicado (400+ vistas) no se tocó.
-- `npm run test:edicion`: fallaban 2 pruebas de BT.709/color (arregladas el 2026-11-02, ver más abajo).
-
-## Episodio del 2026-10-18: llamada partida real y plano doble de vez en cuando (2026-10-19)
-- **Primer caso real de llamada partida** (la página de JC se cerró a los 58:45 de la parte 2 y se retomó 8 s después).
-  `llamadas.js` puso `jc-2_llamada` a −1707 s, antes que `jc_llamada`. Causa: `sync.offsetBetween` tomaba como
-  negativo todo desfase mayor que media ventana de la FFT; `jc-2` empezaba a los 3536 s de una referencia de 4313 s.
-  Ahora los positivos llegan hasta la longitud de la referencia (prueba en `kdenlive.test.js`). Además, si la
-  correlación se aleja más de 30 s de las horas de `session.json`, se usan esas (`DISCREPANCIA_MAXIMA_S`). Huella
-  de la llamada unida a `v: 2` para rehacer las mal unidas. Resultado: `jc-2` en 3536,00 s (el Estudio: 3535,94).
-- **Plano doble de vez en cuando** (`planoDoble.cada` 240 s, `duracion` 8 s): Jose esperaba ver a los dos a la vez
-  «de vez en cuando» y en el episodio anterior solo hubo 3 (los de intercambio rápido). Prueba en `cortes.test.js`.
-- **Plano doble a altura completa**: a media escala (zoom 0,5) quedaban franjas negras arriba y abajo. Ahora cada uno
-  es la franja central de medio ancho de su cámara (`anchoVisible: 0.5` → `crop` con `use_profile` + `qtblend`),
-  comprobado con melt sobre fotogramas reales. Los shorts siguen poniéndolos arriba y abajo (aceptan los dos formatos).
-- **Pico −0,4 dBTP** en la entrega (límite −1): +8 dB de ganancia y un chasquido de un instante (1:39:17) que
-  el AAC dispara. loudnorm apunta ahora `MARGEN_AAC_DB` (1 dB) por debajo de `picoVerdadero`: −1,6 dBTP y
-  −14,2 LUFS, medido con el audio entero. Un `alimiter` detrás lo empeoraba (+0,8). Nueva opción
-  `episodio --reanudar --solo-acabado`: repite el acabado con el render en bruto que ya hay (34 min, no 1,7 h).
-- «El vídeo arranca con la voz ya sonando» fue una respiración a −44 dB en el primer instante; «estamos» empieza
-  entero a los 0,30 s. Falsa alarma de `verificar` (mira cualquier sonido, no solo voz).
-- **Sin MP3**: lo pidió Jose (suben vídeo a YouTube y Spotify; Spotify reparte el audio). `podcast.activo: false`
-  en la configuración del equipo (copia: `episodio.json.copia-20261019-mp3`).
-- Whisper pegó la última palabra al pitido («ahoritaBEEP»): un corte por texto hasta esa frase no la encuentra.
-  Para cortar hasta el final de una parte, mejor `hasta` (segundos) de la parte en el silencio previo.
-
-## Episodio del 2026-11-01 y ffmpeg 9 (2026-11-02)
-- **Segundo caso real de llamada partida** (página de JC cerrada a los 59:02; retomada 10 s después): se unió sola
-  (`jc-2` en 3555,70 s). El corte de la caída se alargó a mano hasta antes de «Te decía que…» para quitar los «hola».
-- **El render rehacía `youtube.md` con la configuración leída al empezar**: el título y los capítulos escritos durante
-  las 2–3 h no salían. Ahora `episodio` relee el `episodio.json` antes de ese paso.
-- **ffmpeg 9 ignora `-color_primaries` y `-color_trc`** (la salida lleva lo que traiga cada fotograma). El episodio
-  salió bien porque el bruto de melt trae las tres etiquetas; con una entrada sin ellas solo quedaba la matriz. Ahora
-  acabado, shorts y clips terminan `-vf` con `setparams` (`COLOR_HD.filtro`), que solo cambia la etiqueta. Eran las
-  2 pruebas que fallaban; la de color fallaba porque sus dos vídeos de partida ya no tenían los mismos píxeles (con
-  los mismos píxeles, el filtro da lo mismo con y sin etiqueta: el color está bien). 318 pruebas, 0 fallos.
+## Cambios del 2026-11-16
+- **`preparar`**: crea el episodio (con la fecha de la grabación), trae las sesiones y las analiza, en una orden.
+  Se para sin copiar nada si hay una sesión de menos de 2 min o pistas a medio subir; elegir con `--sesiones` es la
+  confirmación. `episodio nuevo`, `importar` y `analizar` siguen existiendo por separado.
+- **La carpeta del episodio ya no hay que escribirla**: sin ella, el más reciente (y lo dice); también vale solo la
+  fecha (`2026-11-15`).
+- **`estado` dice el siguiente paso**, mirando lo que hay en el episodio. Al montar se guarda una huella de los
+  cortes y ajustes (`montaje/config.huella`): si cambian después, avisa de que toca montar otra vez; escribir el
+  título o los capítulos no cuenta.
+- **Quitado**: `calibrar` (no era fiable entre sesiones y el retardo quedó en 0), el alias `muestra`, el MP3 del
+  podcast (decidido el 2026-10-19; `"podcast"` en el `episodio.json` del equipo ya no hace nada y se puede borrar) y,
+  en la grabación, el alineador (`tools/alinear.js`, `lib/beep.js`): el editor sincroniza por su cuenta desde
+  `grabaciones/`. `ajustar-audio --probar` sigue: es lo que sirve si un día cambia el equipo y hay que elegir el
+  retardo a oído.
+- Sin probar con material real: `preparar` solo se ha probado con sesiones de mentira (las pruebas) y aquí no hay
+  `melt`; lo que hace por dentro (importar y analizar) es lo de siempre.
 
 ## Pendiente
-1. Primer caso real de caída (2026-10-18): que Jose revise en la revisión el empalme jc → jc-2 y el labial de jc-2.
-2. (Opcional) Medir el retardo imagen↔sonido con una palmada filmada y ver si es el mismo entre sesiones. Hoy no hace
-   falta: con 0 se ve y se oye bien.
-3. En el primer episodio con todo esto: que Jose vea la notificación de Windows al terminar (el mecanismo está
-   comprobado en el PC, pero él no estaba delante), el tiempo real del acabado con nvenc en `estado`, que la revisión
-   llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no, `disimularCortes.segundos`).
+1. En el próximo episodio: empezar con `node cli.js preparar` y comprobar que la carpeta sale con la fecha de la
+   grabación y que `estado` acierta el siguiente paso en cada momento.
+2. Primer caso real de caída (2026-10-18): que Jose revise en la revisión el empalme jc → jc-2 y el labial de jc-2.
+3. Que Jose vea la notificación de Windows al terminar, el tiempo real del acabado con nvenc en `estado`, que la
+   revisión llega bien al móvil y que el plano del otro de 1,5 s en los empalmes queda natural (si no,
+   `disimularCortes.segundos`).
 4. (Opcional) Aviso en el móvil: instalar ntfy y poner el tema en `avisos.ntfy` del `episodio.json` del equipo.
-5. En el primer episodio con lo nuevo: preguntar el pie de YouTube (equipo; los rótulos ya dicen «JC» y «DJ», decidido); ver en la
-   revisión cómo quedan el plano doble y los rótulos; mirar `estado` tras el render (tiempos por fase) para decidir si
-   subir `render.hilos`; comprobar que no salen avisos ⚠ de cámara en material bueno.
-6. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy, por el centro).
-7. En el próximo episodio (cambios del 2026-10-08): que Jose mire el **color** en la revisión (ahora con la matriz bien,
-   puede verse algo menos cálido que antes; si no le gusta, se ajusta `color`), anotar el tiempo del acabado en
-   `estado` (debería bajar con el color reordenado) y los tiempos por paso del análisis, y subir a Spotify el `.mp4`
-   (o el `.mp3` si publican solo audio) para confirmar que lo acepta sin avisos.
+5. Preguntar el pie de YouTube (equipo) si aún falta; mirar `estado` tras el render para decidir si subir
+   `render.hilos`; comprobar que no salen avisos ⚠ de cámara en material bueno.
+6. Color base por cámara; quitar ruido (opción `quitarRuido`, sin probar); encuadre de los shorts por persona (hoy,
+   por el centro).
+7. Que Jose mire el color en la revisión (matriz BT.709 bien desde el 2026-10-08; si lo ve menos cálido, se ajusta
+   `color`).
