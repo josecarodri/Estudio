@@ -170,10 +170,51 @@ function tiemposDeLaUltimaVez(historial) {
   return `${ultimas.map((x) => `${x.fase} ${legible(x.segundos)}`).join(' · ')}${ultimas.length > 1 ? ` (total ${legible(total)})` : ''}`;
 }
 
+/*
+ * Huella de lo que el episodio.json del episodio dice sobre el montaje (cortes, partes, limpiezas…), sin lo que es
+ * solo para publicar: escribir el título o los capítulos no obliga a montar otra vez. Se guarda al montar.
+ */
+const CLAVES_DE_PUBLICAR = ['titulo', 'resumen', 'capitulos', 'shorts', 'clips', 'enlace'];
+function huellaDeMontaje(base) {
+  let c = {};
+  try { c = JSON.parse(fs.readFileSync(path.join(base, 'episodio.json'), 'utf8').replace(/^\uFEFF/, '')); } catch { /* sin archivo o ilegible */ }
+  for (const k of CLAVES_DE_PUBLICAR) delete c[k];
+  return crypto.createHash('sha1').update(JSON.stringify(c)).digest('hex').slice(0, 16);
+}
+
+/*
+ * Qué toca ahora en el episodio, mirando lo que ya hay en sus carpetas (no hace falta recordar por dónde se iba).
+ * Devuelve una línea con el paso y su orden.
+ */
+function siguientePaso(r) {
+  const nombre = path.basename(r.base);
+  const fecha = (...p) => { try { return fs.statSync(path.join(...p)).mtimeMs; } catch { return 0; } };
+  let originales = [];
+  try { originales = fs.readdirSync(r.originales); } catch { /* sin carpeta */ }
+  if (!originales.length) return 'traer las grabaciones y analizarlas → node cli.js preparar';
+  if (!fecha(r.montaje, 'propuesta.md')) return 'analizar (transcribe y propone cortes) → node cli.js analizar';
+  const proyecto = fecha(r.montaje, 'episodio.kdenlive');
+  if (!proyecto) return 'enseñar montaje/propuesta.md, aprobar lo que diga el usuario (node cli.js aprobar 1.1 …) y montar → node cli.js episodio --solo-montaje';
+  const huella = path.join(r.montaje, 'config.huella');
+  if (existe(huella) && fs.readFileSync(huella, 'utf8').trim() !== huellaDeMontaje(r.base)) {
+    return 'los cortes o ajustes del episodio.json cambiaron después del último montaje → node cli.js episodio --solo-montaje';
+  }
+  const final = fecha(r.entrega, `${nombre}.mp4`);
+  if (final < proyecto) {
+    if (fecha(r.montaje, 'revision.mp4') < proyecto) return 'vídeo de revisión para el visto bueno → node cli.js revision';
+    return 'enviar montaje/revision.mp4 y, con el visto bueno, renderizar → node cli.js episodio --reanudar';
+  }
+  const youtube = path.join(r.entrega, 'youtube.md');
+  if (!existe(youtube)) return 'título, descripción y capítulos → node cli.js youtube';
+  if (/^## Pendiente/m.test(fs.readFileSync(youtube, 'utf8'))) return 'falta algo de YouTube (entrega/youtube.md, «Pendiente»): ponerlo en el episodio.json del episodio → node cli.js youtube';
+  return 'vídeo final listo: subirlo con entrega/youtube.md; opcional shorts y clips; ya publicado → node cli.js limpiar --estudio';
+}
+
 function estado(carpeta) {
   const r = EP.rutas(carpeta);
   const f = path.join(r.montaje, 'estado.json');
-  if (!existe(f)) return { texto: 'sin actividad registrada en este episodio.' };
+  const siguiente = `\nsiguiente: ${siguientePaso(r)}`;
+  if (!existe(f)) return { texto: `sin actividad registrada en este episodio.${siguiente}` };
   const e = leerJson(f);
   const min = Math.round((Date.now() - new Date(e.inicioFase).getTime()) / 60000);
   let vivo = false;
@@ -187,7 +228,8 @@ function estado(carpeta) {
   return {
     fase: e.fase, vivo, minutos: min,
     texto: `${e.fase}${e.detalle ? ` · ${e.detalle}` : ''} · hace ${min} min${extra.length ? ` · ${extra.join(' · ')}` : ''}${marca}`
-      + `${tiempos ? `\ntiempos de la última vez: ${tiempos}` : ''}`,
+      + `${tiempos ? `\ntiempos de la última vez: ${tiempos}` : ''}`
+      + (vivo ? '' : siguiente),
   };
 }
 
@@ -609,6 +651,6 @@ function verificar(carpeta) {
 
 module.exports = {
   tiemposDeLaUltimaVez,
-  marcarFase, estado, huellaDeParte, llamadaDe, resolverLimites, resolverCortesTexto, sueloDeRuido, confirmarSilencios,
+  marcarFase, estado, siguientePaso, huellaDeMontaje, huellaDeParte, llamadaDe, resolverLimites, resolverCortesTexto, sueloDeRuido, confirmarSilencios,
   analizar, aprobar, verificar, leerEbur128, coincidencia, tiempoASeg, marcasEnVivo, guiasDeMarcas, textoEntre, CORTE_EN_VIVO_MINIMO,
 };

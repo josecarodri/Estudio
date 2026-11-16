@@ -314,6 +314,32 @@ function rutas(carpeta) {
   };
 }
 
+/* El episodio más reciente de la raíz (las carpetas se llaman por su fecha), o null. */
+function episodioReciente(raiz) {
+  const base = path.resolve(raiz || RAIZ_POR_DEFECTO);
+  let nombres = [];
+  try { nombres = fs.readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory() && /^\d{4}-\d{2}-\d{2}/.test(e.name)).map((e) => e.name); } catch { return null; }
+  return nombres.length ? path.join(base, nombres.sort().pop()) : null;
+}
+
+/*
+ * La carpeta de un episodio a partir de lo que se escriba: una ruta, solo su fecha («2026-11-15», se busca en la
+ * raíz de episodios) o nada (el más reciente). Así no hay que copiar la ruta entera en cada comando.
+ */
+function resolverCarpeta(valor, raiz) {
+  if (valor === undefined || valor === null || valor === '') {
+    const reciente = episodioReciente(raiz);
+    if (!reciente) throw new Error(`no hay episodios en ${path.resolve(raiz || RAIZ_POR_DEFECTO)}. Empieza con: node cli.js preparar`);
+    return reciente;
+  }
+  const texto = String(valor);
+  if (/^\d{4}-\d{2}-\d{2}[\w-]*$/.test(texto) && !fs.existsSync(path.resolve(texto))) {
+    const enRaiz = path.join(path.resolve(raiz || RAIZ_POR_DEFECTO), texto);
+    if (fs.existsSync(enRaiz)) return enRaiz;
+  }
+  return texto;
+}
+
 function crearEstructura(carpeta) {
   const r = rutas(carpeta);
   for (const s of SUBCARPETAS) fs.mkdirSync(r[s], { recursive: true });
@@ -731,6 +757,8 @@ module.exports = {
   CLAVES_DEL_EPISODIO,
   PLANTILLA_EPISODIO,
   RAIZ_POR_DEFECTO,
+  episodioReciente,
+  resolverCarpeta,
   DESCARGAS_POR_DEFECTO,
   ESTUDIO_POR_DEFECTO,
   PREFIJO_SESION,
