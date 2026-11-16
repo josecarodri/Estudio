@@ -33,6 +33,16 @@ Corto a propósito: lo vigente y lo pendiente. El proceso está en el skill `/ep
 - Sin probar con material real: `preparar` solo se ha probado con sesiones de mentira (las pruebas) y aquí no hay
   `melt`; lo que hace por dentro (importar y analizar) es lo de siempre.
 
+## Episodio del 2026-11-08: caídas por los 4 GB y negro sin cámara (2026-11-08)
+- **Las caídas «a la hora» son el límite de 4 GB de Edge**: la página de JC se cerró dos veces, cada una a ~58:45 de
+  grabar su tramo, con `jc_camara.mp4` en 4 291 MB y `jc-2_camara.mp4` en 4 294 MB (2³² = 4 295 MB). La del iPad de DJ
+  pasó de 8,8 GB sin problema. La del 2026-11-01 (a los 59:02) fue casi seguro lo mismo. Arreglado después en el
+  Estudio: el PC graba en WebM (ver Pendiente, punto 0). Lo de después de cada caída llegó entero; solo se pierden 1–2 s.
+- **Negro de ~2 s antes de una caída**: la cámara de JC acaba unos segundos antes que su micro, el turno seguía siendo
+  suyo y `buildRecipe` recortaba el plano a lo que hay sin poner nada en su lugar. Ahora cubre todo hueco sin plano
+  con la cámara que tenga imagen ahí (también los 0,2 s del principio). Hace falta `--rehacer` para que un reparto
+  ya hecho lo coja (la huella no mira el código).
+
 ## Pendiente
 0. **Primera grabación larga con el PC en WebM**: comprobar que la página de JC pasa de los 58 min sin cerrarse, que
    en `grabaciones/` salen `jc_camara.webm` y `jc_llamada.webm`, y que el latido dice `grabadores=recording+recording`.
