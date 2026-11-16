@@ -120,3 +120,55 @@ test('estado dice el siguiente paso según lo que ya hay en el episodio', () => 
   assert.match(AU.siguientePaso(r), /vídeo final listo/);
   assert.match(AU.estado(ep).texto, /sin actividad registrada.*\nsiguiente: vídeo final listo/);
 });
+
+const hayFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+
+test('los vídeos WebM del PC llegan a originales/ ya en MP4, sin recodificar, y no se repite si no cambian', { skip: !hayFfmpeg }, () => {
+  const estudio = tmp();
+  const dir = path.join(estudio, 'dtp', '2026-11-20_20-00-00');
+  fs.mkdirSync(dir, { recursive: true });
+  const webm = path.join(dir, 'jc_camara.webm');
+  const hecho = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440',
+    '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'libopus', '-f', 'matroska', webm], { encoding: 'utf8' });
+  assert.strictEqual(hecho.status, 0, hecho.stderr);
+  fs.writeFileSync(path.join(dir, 'jc_audio.wav'), 'x');
+  const startAt = Date.now() - 3600 * 1000;
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({
+    room: 'dtp', id: '2026-11-20_20-00-00', createdAt: new Date(startAt).toISOString(), startAt, stopAt: startAt + 1800000,
+    tracks: { 'a-camara': { file: 'jc_camara.webm', complete: true, startedAtServer: startAt + 5 }, 'a-audio': { file: 'jc_audio.wav', complete: true } },
+  }));
+  const [sesion] = EP.descubrirSesionesEstudio(estudio, 36);
+  const originales = path.join(tmp(), 'originales');
+  const r = EP.importarSesion(sesion, originales, {});
+  assert.deepStrictEqual(r.hechos.map((h) => `${h.nombre}: ${h.accion}`).sort(), ['jc_audio.wav: copiado', 'jc_camara.mp4: convertido a mp4', 'session.json: copiado']);
+  const mp4 = path.join(r.destino, 'jc_camara.mp4');
+  assert.ok(!fs.existsSync(path.join(r.destino, 'jc_camara.webm')), 'el WebM no se copia');
+  const info = JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_name', '-of', 'json', mp4], { encoding: 'utf8' }).stdout);
+  assert.deepStrictEqual(info.streams.map((s) => s.codec_name).sort(), ['h264', 'opus'], 'mismos códecs: no se recodifica');
+  assert.ok(Math.abs(Number(info.format.duration) - 2) < 0.2, 'y ahora dice cuánto dura');
+  // El editor busca cada pista por su nombre en session.json: debe decir el del MP4.
+  const s = JSON.parse(fs.readFileSync(path.join(r.destino, 'session.json'), 'utf8'));
+  assert.strictEqual(s.tracks['a-camara'].file, 'jc_camara.mp4');
+  assert.strictEqual(s.tracks['a-camara'].archivoOriginal, 'jc_camara.webm');
+  assert.strictEqual(s.tracks['a-camara'].startedAtServer, startAt + 5);
+  // Repetir no vuelve a convertir; si el WebM crece (terminó de subir después), sí.
+  const antes = fs.statSync(mp4).mtimeMs;
+  assert.ok(EP.importarSesion(sesion, originales, {}).hechos.some((h) => h.nombre === 'jc_camara.mp4' && h.accion === 'ya estaba'));
+  assert.strictEqual(fs.statSync(mp4).mtimeMs, antes);
+  assert.ok(EP.importarSesion({ ...sesion, archivos: sesion.archivos.map((f) => ({ ...f, bytes: f.bytes + 1 })) }, originales, {}).hechos
+    .some((h) => h.nombre === 'jc_camara.mp4' && h.accion === 'convertido a mp4'));
+});
+
+test('un WebM de vídeo que quedó suelto en originales/ se convierte ahí y se aparta', { skip: !hayFfmpeg }, () => {
+  const originales = path.join(tmp(), 'originales');
+  const dir = path.join(originales, '2026-11-20_20-00-00');
+  fs.mkdirSync(dir, { recursive: true });
+  spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-f', 'matroska', path.join(dir, 'jc_llamada.webm')]);
+  fs.writeFileSync(path.join(dir, 'jc_camara.resto-123.webm'), 'x');
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({ tracks: { a: { file: 'jc_llamada.webm' } } }));
+  assert.deepStrictEqual(EP.convertirWebmSueltos(originales), ['jc_llamada.webm']);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['.webm', 'jc_camara.resto-123.webm', 'jc_llamada.mp4', 'session.json'], 'la copia de rescate no se toca');
+  assert.deepStrictEqual(fs.readdirSync(path.join(dir, '.webm')), ['jc_llamada.webm']);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')).tracks.a.file, 'jc_llamada.mp4');
+  assert.deepStrictEqual(EP.convertirWebmSueltos(originales), [], 'la segunda vez no hay nada que hacer');
+});

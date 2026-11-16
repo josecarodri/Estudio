@@ -38,7 +38,9 @@ Por cada persona, en `grabaciones/<sala>/<fecha_hora>/` del PC:
 | `ana_llamada.mp4` / `.webm` | La llamada tal como se vio: las dos cámaras lado a lado (720p) + el audio de ambos. Referencia opcional. |
 | `session.json` | Tiempos de cada pista en el reloj común y datos para sincronizar. |
 
-El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graba en MP4 si puede y si no en WebM. La cámara se
+El iPad (Safari) graba en MP4 H.264/AAC; Chrome/Edge en el PC graban en **WebM con H.264** (`jc_camara.webm`): en MP4 su
+grabador cierra la página cuando el archivo llega a 4 GB (ver «Resistencia a fallos»). El editor lo pasa a MP4 sin
+recodificar al importar. La cámara se
 pide a 30 fps como mucho (si la cámara lo admite): el montaje va a 30, y a 60 se gastan los bits en fotogramas que se tiran.
 
 Al descargarlos desde **Grabaciones**, los archivos llegan con la sesión delante del nombre
@@ -183,6 +185,13 @@ propuestas de corte y los ★ en una lista de momentos buenos, y los pone como g
 
 ## Resistencia a fallos
 
+- **El límite de 4 GB de Edge y Chrome** (2026-11-16): grabando en MP4, su grabador cierra la página cuando el archivo
+  de una pista llega a 4 GB (2^32 bytes: unos 58 min de cámara a 1080p). Así se cortaron las grabaciones del 2026-10-03
+  y del 2026-10-18, siempre en el PC y nunca en el iPad. Está reproducido con `http://localhost:8080/prueba-4gb.html`
+  (graba ruido y lo tira: llega a 4 GB en unos minutos y dice si la página aguanta con cada formato): con MP4 se cae
+  justo a los 4 GB; con WebM pasa de largo. Por eso el PC graba en WebM. Si un navegador de esa familia solo supiera
+  MP4, la página avisa desde los 3,4 GB para parar y volver a grabar, y cada latido del registro lleva
+  `pista_mayor_mb`.
 - Cada segundo de grabación se guarda primero **en el propio dispositivo** (IndexedDB) y después se sube en orden.
   Si internet se corta, la grabación continúa y la subida se reanuda sola al volver la conexión.
 - Si se cae la conexión con la sala (un parpadeo del wifi, de la red del iPad o del túnel), la otra persona **no cuelga

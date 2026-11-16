@@ -603,6 +603,8 @@
       audio_retraso_ms: state.rec?.worklet?.startCtx && state.ctx
         ? Math.round((localNow() - state.rec.startLocal) - (state.ctx.currentTime - state.rec.worklet.startCtx) * 1000) : undefined,
       otro_graba: state.remoteStatus ? !!state.remoteStatus.recording : undefined,
+      // Lo que lleva la pista más grande: si la página muere, el último latido dice con cuánto (ver el límite de 4 GB).
+      pista_mayor_mb: state.rec ? Math.round(Math.max(0, ...state.uploaders.filter((u) => !u.finished).map((u) => u.bytesTotal)) / 1048576) : undefined,
       mic_nivel: state.micEstado || undefined,
       mic_voz_db: state.micVozDb ?? undefined,
     };
@@ -788,16 +790,27 @@
   }
 
   // ------------------------------------------------------------------ grabación
+  /*
+   * Formato de la grabación. Edge y Chrome, en WebM con H.264: en MP4 su grabador cierra la página cuando el
+   * archivo llega a 4 GB (unos 58 min a 1080p; así se cortaron varias grabaciones, y está reproducido con
+   * prueba-4gb.html). El WebM no tiene ese límite y el editor lo pasa a MP4 sin recodificar al importar.
+   * Safari (el iPad) sigue en MP4, que ahí no da problemas.
+   */
+  const esChromium = !isIOS && /Chrome\//.test(navigator.userAgent);
   function pickMime(kind) {
-    const video = [
+    const mp4 = [
       'video/mp4;codecs=avc1.640028,mp4a.40.2',
       'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
       'video/mp4;codecs=avc1,mp4a.40.2',
+    ];
+    const webm = [
+      'video/webm;codecs=h264,opus',
+      'video/webm;codecs=avc1,opus',
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
       'video/webm',
-      'video/mp4',
     ];
+    const video = esChromium ? [...webm, ...mp4, 'video/mp4'] : [...mp4, ...webm, 'video/mp4'];
     const list = kind === 'video' ? video : ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
     return list.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
   }
@@ -1115,7 +1128,23 @@
     // Por internet la subida puede ir más lenta que la grabación: lo pendiente queda a salvo en el dispositivo.
     const pending = state.uploaders.filter((u) => !u.finished).reduce((a, u) => a + (u.bytesTotal - u.bytesAcked), 0);
     const warn = $('#uploadWarning');
-    if (pending > 8 * 1024 * 1024 || (!state.rec && state.uploaders.some((u) => !u.finished))) {
+    // En Edge y Chrome una pista en MP4 no puede pasar de 4 GB (la página se cierra). Ya graban en WebM; si alguno
+    // solo supiera MP4, se avisa antes de llegar.
+    const grande = state.rec && state.uploaders.filter((u) => !u.finished).sort((a, b) => b.bytesTotal - a.bytesTotal)[0];
+    const limite = grande ? Llamada.avisoDeLimite({
+      bytes: grande.bytesTotal, segundos: (localNow() - state.rec.startLocal) / 1000,
+      mp4: (grande.info.mime || '').includes('mp4'), chromium: esChromium,
+    }) : '';
+    if (limite && !renderUploads.limiteAnotado) {
+      renderUploads.limiteAnotado = true;
+      Registro.anotar('limite-4gb-cerca', { pista: grande.info.kind, mb: Math.round(grande.bytesTotal / 1048576) });
+      toast(limite, 'warn', 15000);
+    }
+    if (!state.rec) renderUploads.limiteAnotado = false;
+    if (limite) {
+      warn.hidden = false;
+      warn.textContent = limite;
+    } else if (pending > 8 * 1024 * 1024 || (!state.rec && state.uploaders.some((u) => !u.finished))) {
       warn.hidden = false;
       warn.textContent = state.rec
         ? `Pendiente de subir: ${fmtBytes(pending)}. Tu conexión sube más despacio de lo que grabas; no pasa nada, se guarda en este dispositivo y se terminará de subir al acabar.`

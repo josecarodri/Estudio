@@ -268,33 +268,116 @@ function descubrirSesionesEstudio(carpeta, horas) {
 }
 
 /*
+ * Edge y Chrome graban la cámara y la llamada en WebM (en MP4 la página se les cierra al llegar a 4 GB). Ese WebM
+ * no dice cuánto dura ni tiene índice, y así no se puede montar: se pasa a MP4 sin recodificar (lo que tarda una
+ * copia; la imagen y el sonido son los mismos, bit a bit). Devuelve { salida } o { error }.
+ */
+// Las copias de rescate («….resto-123.webm») no: se juntan byte a byte con su WebM antes de importar.
+const ES_WEBM_DE_VIDEO = /_(camara|llamada)\.webm$/i;
+function webmAMp4(origen, salida) {
+  const tmp = `${salida}.haciendo.mp4`;
+  const res = spawnSync('ffmpeg', ['-v', 'error', '-y', '-i', origen, '-map', '0', '-c', 'copy', tmp],
+    { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (res.error || res.status !== 0) {
+    fs.rmSync(tmp, { force: true });
+    return { error: (res.error ? res.error.message : (res.stderr || 'ffmpeg falló')).trim().split('\n').slice(-2).join(' · ') };
+  }
+  fs.renameSync(tmp, salida);
+  return { salida };
+}
+
+/* En el session.json copiado, las pistas convertidas pasan a llamarse como su MP4 (el editor las busca por nombre). */
+function renombrarEnSesion(archivoSesion, renombres) {
+  if (!Object.keys(renombres).length || !fs.existsSync(archivoSesion)) return;
+  let s;
+  try { s = JSON.parse(fs.readFileSync(archivoSesion, 'utf8')); } catch { return; }
+  for (const t of Object.values(s.tracks || {})) {
+    if (t && renombres[t.file]) { t.archivoOriginal = t.file; t.file = renombres[t.file]; }
+  }
+  fs.writeFileSync(archivoSesion, JSON.stringify(s, null, 2));
+}
+
+/*
+ * Vídeos WebM que quedaron sin convertir en originales/ (traídos a mano o de Descargas): se convierten ahí mismo
+ * y el WebM se aparta a `.webm/`, fuera de lo que se monta. Devuelve los nombres convertidos; lanza si uno falla.
+ */
+function convertirWebmSueltos(originales) {
+  const hechos = [];
+  let carpetas = [];
+  try {
+    carpetas = [originales, ...fs.readdirSync(originales, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => path.join(originales, e.name))];
+  } catch { return hechos; }
+  for (const dir of carpetas) {
+    const renombres = {};
+    for (const n of fs.readdirSync(dir).filter((x) => ES_WEBM_DE_VIDEO.test(x))) {
+      const mp4 = path.join(dir, n.replace(/\.webm$/i, '.mp4'));
+      const r = webmAMp4(path.join(dir, n), mp4);
+      if (r.error) throw new Error(`no se pudo pasar ${n} a MP4: ${r.error}`);
+      fs.mkdirSync(path.join(dir, '.webm'), { recursive: true });
+      fs.renameSync(path.join(dir, n), path.join(dir, '.webm', n));
+      renombres[n] = path.basename(mp4);
+      hechos.push(n);
+    }
+    renombrarEnSesion(path.join(dir, 'session.json'), renombres);
+  }
+  return hechos;
+}
+
+/*
  * Copia (o mueve) una sesión del Estudio a originales/<sesión>/, con su session.json. Lo que ya está
  * con el mismo tamaño se salta, así que se puede repetir sin miedo (por ejemplo, si el invitado
- * terminó de subir después).
+ * terminó de subir después). Los vídeos en WebM (los del PC) llegan ya convertidos a MP4 (ver webmAMp4):
+ * se convierten leyendo del Estudio, sin copia intermedia, y se apunta de qué tamaño era el WebM para no repetirlo.
  */
 function importarSesion(sesion, originales, opciones) {
   const o = opciones || {};
   const destino = path.join(originales, sesion.id);
   fs.mkdirSync(destino, { recursive: true });
   const hechos = [];
+  const renombres = {};
+  const mover = (de, a) => {
+    try { fs.renameSync(de, a); } catch (e) {
+      if (e.code !== 'EXDEV') throw e;
+      fs.copyFileSync(de, a);
+      fs.unlinkSync(de);
+    }
+  };
   for (const f of [...sesion.archivos, { nombre: 'session.json', ruta: sesion.meta, bytes: fs.statSync(sesion.meta).size }]) {
+    if (ES_WEBM_DE_VIDEO.test(f.nombre)) {
+      const nombre = f.nombre.replace(/\.webm$/i, '.mp4');
+      const mp4 = path.join(destino, nombre);
+      const marca = path.join(destino, `.${nombre}.de-webm`);
+      renombres[f.nombre] = nombre;
+      if (fs.existsSync(mp4) && fs.existsSync(marca) && fs.readFileSync(marca, 'utf8').trim() === String(f.bytes)) {
+        hechos.push({ nombre, accion: 'ya estaba' });
+        continue;
+      }
+      const r = webmAMp4(f.ruta, mp4);
+      if (r.error) throw new Error(`no se pudo pasar ${f.nombre} a MP4: ${r.error}`);
+      fs.writeFileSync(marca, `${f.bytes}\n`);
+      // Al mover, el WebM (el original de verdad) se guarda aparte, fuera de lo que se monta.
+      if (o.mover) {
+        fs.mkdirSync(path.join(destino, '.webm'), { recursive: true });
+        mover(f.ruta, path.join(destino, '.webm', f.nombre));
+      }
+      hechos.push({ nombre, accion: 'convertido a mp4' });
+      continue;
+    }
     const a = path.join(destino, f.nombre);
     if (fs.existsSync(a) && fs.statSync(a).size === f.bytes && f.nombre !== 'session.json') {
       hechos.push({ nombre: f.nombre, accion: 'ya estaba' });
       continue;
     }
     if (o.mover && f.nombre !== 'session.json') {
-      try { fs.renameSync(f.ruta, a); } catch (e) {
-        if (e.code !== 'EXDEV') throw e;
-        fs.copyFileSync(f.ruta, a);
-        fs.unlinkSync(f.ruta);
-      }
+      mover(f.ruta, a);
       hechos.push({ nombre: f.nombre, accion: 'movido' });
     } else {
       fs.copyFileSync(f.ruta, a);
       hechos.push({ nombre: f.nombre, accion: 'copiado' });
     }
   }
+  renombrarEnSesion(path.join(destino, 'session.json'), renombres);
   return { destino, hechos };
 }
 
@@ -757,6 +840,8 @@ module.exports = {
   CLAVES_DEL_EPISODIO,
   PLANTILLA_EPISODIO,
   RAIZ_POR_DEFECTO,
+  webmAMp4,
+  convertirWebmSueltos,
   episodioReciente,
   resolverCarpeta,
   DESCARGAS_POR_DEFECTO,

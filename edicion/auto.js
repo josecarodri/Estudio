@@ -378,6 +378,7 @@ function analizar(carpeta, flags) {
   const r = EP.rutas(carpeta);
   if (!existe(r.originales)) throw new Error(`no existe ${r.originales}`);
   const { config } = EP.cargarConfig(r.base);
+  for (const n of EP.convertirWebmSueltos(r.originales)) console.log(`convertido a MP4 (sin recodificar): ${n}`);
   const partes = EP.agruparPartes(r.originales);
   if (!partes.length) throw new Error('no hay archivos en originales/');
   fs.mkdirSync(r.montaje, { recursive: true });

@@ -58,6 +58,7 @@ Todo se ejecuta desde `C:\Users\Carlos\Estudio\edicion` con `node cli.js …` (e
 - Probado solo con material sintético: en el primer caso real, que el usuario revise en Kdenlive el empalme jc → jc-2 y el labial de jc-2 antes de renderizar.
 - Pistas con `tarde` en `session.json` (esa página perdió la orden de grabar y empezó sola unos segundos después): no llevan pitido de inicio y se sincronizan por la voz. No hay que hacer nada.
 - Si el servidor del Estudio se reinició en plena grabación, no cambia nada para editar: la sesión sigue siendo una sola.
+- **Vídeos del PC en WebM** (desde el 2026-11-16, para esquivar el cierre de Edge a los 4 GB): en `grabaciones/` son `jc_camara.webm` y `jc_llamada.webm`; `preparar`/`importar` los dejan en `originales/` ya como `.mp4` (sin recodificar: «convertido a mp4») y el `session.json` copiado dice el nombre nuevo. No hay que hacer nada. Una copia de rescate `….resto-N.webm` se junta con el `.webm` de `grabaciones/` y después se repite `preparar`.
 - Si alguien manda una **copia de rescate** (`…_camara.resto-123456.mp4`, de «Descargar copia» cuando lo primero ya se había subido), júntala con su archivo antes de montar: `node cli.js juntar-copia <originales/…/jc_camara.mp4> <copia>` (deja el de antes en `.respaldos/…sin-resto…`, fuera de lo que se monta). Si no, `episodio` la ignora y avisa.
 - Si a alguien le falta el micro (su WAV no llegó), se usa el sonido de su cámara: para elegir plano y también en el montaje (igualado como un micro). Avísale al usuario de que esa voz sonará peor.
 

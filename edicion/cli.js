@@ -1217,6 +1217,7 @@ function cmdEpisodio(args) {
   const { config } = cargada;
   mostrarConfig(cargada);
 
+  for (const n of EP.convertirWebmSueltos(r.originales)) console.log(`convertido a MP4 (sin recodificar): ${n}`);
   const partes = EP.agruparPartes(r.originales);
   if (!partes.length) throw new Error(`no hay archivos de vídeo ni audio en ${r.originales}.`);
   mostrarPartes(partes);

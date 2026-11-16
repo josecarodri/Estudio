@@ -25,10 +25,19 @@ Corto a propósito: lo vigente y lo pendiente. El proceso está en el skill `/ep
   en la grabación, el alineador (`tools/alinear.js`, `lib/beep.js`): el editor sincroniza por su cuenta desde
   `grabaciones/`. `ajustar-audio --probar` sigue: es lo que sirve si un día cambia el equipo y hay que elegir el
   retardo a oído.
+- **Vídeos del PC en WebM → MP4 al importar**: Edge y Chrome cerraban la página al llegar el MP4 a 4 GB (era la causa
+  de las caídas de JC); ahora graban WebM con H.264 y `importarSesion` lo convierte sin recodificar (`webmAMp4`),
+  apunta el tamaño del WebM en `.<nombre>.mp4.de-webm` para no repetirlo y renombra la pista en el `session.json`
+  copiado (`archivoOriginal` guarda el nombre de antes). Un WebM suelto en `originales/` se convierte al analizar o
+  montar y se aparta a `.webm/`. Probado de punta a punta con una grabación de Chromium (preparar, analizar y montar).
 - Sin probar con material real: `preparar` solo se ha probado con sesiones de mentira (las pruebas) y aquí no hay
   `melt`; lo que hace por dentro (importar y analizar) es lo de siempre.
 
 ## Pendiente
+0. **Primera grabación larga con el PC en WebM**: comprobar que la página de JC pasa de los 58 min sin cerrarse, que
+   en `grabaciones/` salen `jc_camara.webm` y `jc_llamada.webm`, y que el latido dice `grabadores=recording+recording`.
+   Antes, 10 min en el PC de JC con `http://localhost:8080/prueba-4gb.html`: debe salir «WebM con H.264: pasó de 4 GB».
+   Si ese botón sale desactivado, Edge grabaría en VP9 (más carga de procesador): avisar.
 1. En el próximo episodio: empezar con `node cli.js preparar` y comprobar que la carpeta sale con la fecha de la
    grabación y que `estado` acierta el siguiente paso en cada momento.
 2. Primer caso real de caída (2026-10-18): que Jose revise en la revisión el empalme jc → jc-2 y el labial de jc-2.

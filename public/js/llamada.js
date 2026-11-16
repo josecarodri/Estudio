@@ -180,10 +180,27 @@
     return '';
   }
 
+  /**
+   * Edge y Chrome, grabando en MP4, cierran la página cuando el archivo de una pista llega a 4 GiB (2^32 bytes):
+   * a 1080p son unos 58 min, y así se cortaron las grabaciones del 2026-10-03 y del 2026-10-18. Por eso graban en
+   * WebM (ver pickMime); este aviso queda para un navegador de esa familia que solo supiera MP4: da tiempo a parar
+   * y volver a grabar (cada grabación es una parte al editar).
+   * `bytes`: lo que lleva la pista; `segundos`: lo que lleva grabando. Devuelve el aviso, o '' si no toca.
+   */
+  const LIMITE_MP4 = 2 ** 32;
+  function avisoDeLimite({ bytes, segundos, mp4, chromium, desde = 0.8 }) {
+    if (!mp4 || !chromium || !(bytes > LIMITE_MP4 * desde)) return '';
+    const gb = (bytes / 2 ** 30).toFixed(1).replace('.', ',');
+    const ritmo = segundos > 0 ? bytes / segundos : 0;
+    const min = ritmo ? Math.max(0, Math.floor((LIMITE_MP4 - bytes) / ritmo / 60)) : null;
+    return `⚠ Tu vídeo lleva ${gb} GB y el navegador cierra la página al llegar a 4 GB${min === null ? '' : ` (quedan unos ${min} min)`}. `
+      + 'Cuando puedan, pulsen Detener y vuelvan a Grabar: al editar se une como otra parte.';
+  }
+
   const api = {
     viva, alEntrarOtro, alVolver, ofertaNueva, esDeLlamadaAnterior, ofreceYo, alPedirReinicio, alVigilarLlamada,
     recuperacionVigente, alRecibirGrabacion, esPronto, estadoDelOtro, avisoDeMarca, textoBotonCorte,
-    nivelDelMicro, avisoDeMicro,
+    nivelDelMicro, avisoDeMicro, avisoDeLimite,
   };
   root.Llamada = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
